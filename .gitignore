@@ -1,0 +1,47 @@
+# Built application files
+*.apk
+*.aar
+*.ap_
+*.aab
+*.dex
+
+# Files for the ART/Dalvik VM
+*.class
+
+# Java heap dumps
+*.hprof
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Gradle files
+.gradle/
+build/
+**/build/
+
+# Local configuration file (sdk.dir, ndk.dir, etc.)
+local.properties
+
+# Signing files
+*.jks
+*.keystore
+
+# Kotlin compilation cache
+.kotlin/
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+[Dd]esktop.ini
+
+# Log files
+*.log

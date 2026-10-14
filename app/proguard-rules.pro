@@ -1,0 +1,9 @@
+-keep class com.hierynomus.** { *; }
+-dontwarn com.hierynomus.**
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**
+-keep class com.google.mlkit.** { *; }
+-dontwarn com.google.mlkit.**
+-dontwarn javax.el.**
+-dontwarn net.engio.mbassy.**
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod

@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">ItShare</string>
+    <string name="scan_wifi_qr">Scan QR WiFi</string>
+    <string name="scan_share_qr">Scan QR Folder Share</string>
+    <string name="onboarding_title">ItShare</string>
+    <string name="onboarding_subtitle">Transfer file lokal cepat &amp; aman antara HP dan PC</string>
+    <string name="camera_permission_required">Izin kamera diperlukan untuk memindai kode QR</string>
+    <string name="grant_permission">Berikan Izin</string>
+    <string name="manual_input">Input Manual</string>
+    <string name="connecting">Menghubungkan ke folder share...</string>
+    <string name="connecting_wifi">Menghubungkan ke WiFi...</string>
+    <string name="wifi_connected_prompt">WiFi terhubung! Lanjutkan untuk memindai QR Folder Share?</string>
+    <string name="continue_scan_share">Pindai Folder Share</string>
+    <string name="session_expired">Sesi telah kedaluwarsa atau dihentikan oleh PC.</string>
+    <string name="download">Unduh</string>
+    <string name="upload">Unggah</string>
+    <string name="cancel">Batal</string>
+    <string name="read_only_mode">Sesi hanya baca (Upload dinonaktifkan)</string>
+    <string name="backup_data">Cadangkan Data</string>
+    <string name="import_data">Pulihkan Data</string>
+</resources>
