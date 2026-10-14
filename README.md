@@ -2,9 +2,18 @@
 
 [![Download ItShare APK](https://img.shields.io/badge/Download-ItShare_v1.0.0_(Android_APK)-34A853?style=for-the-badge&logo=android&logoColor=white)](https://github.com/okkysatria/ItShare-Android/releases/download/v1.0.0/ItShare.apk)
 [![GitHub Release](https://img.shields.io/github/v/release/okkysatria/ItShare-Android?style=for-the-badge&color=blue)](https://github.com/okkysatria/ItShare-Android/releases/latest)
-[![PC Host](https://img.shields.io/badge/PC_Host-Repository-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/okkysatria/ItShare-pc)
+[![PC Host](https://img.shields.io/badge/Companion_Host-ItShare_PC-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/okkysatria/ItShare-pc)
 
-> **Instant Download**: [📥 **ItShare.apk (v1.0.0)**](https://github.com/okkysatria/ItShare-Android/releases/download/v1.0.0/ItShare.apk) — Direct APK package for Android 8.0+ devices.
+### 🔗 ItShare Ecosystem & Downloads
+
+| Component | Platform | Role | Direct Binary | Source Repository |
+|---|---|---|---|---|
+| **ItShare Android** | Android (API 26+) | Mobile Client | [📱 **Download ItShare.apk**](https://github.com/okkysatria/ItShare-Android/releases/download/v1.0.0/ItShare.apk) | *(This Repository)* |
+| **ItShare PC** | Windows (64-bit) | Host / Server | [📥 **Download ItShare.exe**](https://github.com/okkysatria/ItShare-pc/releases/download/v1.0.0/ItShare.exe) | [🔗 **okkysatria/ItShare-pc**](https://github.com/okkysatria/ItShare-pc) |
+
+> **Note**: ItShare requires both sides to work together. Launch the companion **[ItShare PC Host](https://github.com/okkysatria/ItShare-pc)** to share a folder and display the QR code, then scan it with this **Android Client** to browse and download files.
+
+---
 
 An Android client designed to connect to the **ItShare PC** host via local SMB (Server Message Block). It allows browsing remote directories, previewing media files inline, and transferring files at local network speeds without third-party cloud infrastructure.
 
