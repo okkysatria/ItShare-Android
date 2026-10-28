@@ -1,133 +1,127 @@
-# ItShare (Android Client)
+# ItShare Android
 
 [![Download ItShare APK](https://img.shields.io/badge/Download-ItShare_v1.0.0_(Android_APK)-34A853?style=for-the-badge&logo=android&logoColor=white)](https://github.com/okkysatria/ItShare-Android/releases/download/v1.0.0/ItShare.apk)
 [![GitHub Release](https://img.shields.io/github/v/release/okkysatria/ItShare-Android?style=for-the-badge&color=blue)](https://github.com/okkysatria/ItShare-Android/releases/latest)
-[![PC Host](https://img.shields.io/badge/Companion_Host-ItShare_PC-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/okkysatria/ItShare-pc)
+[![ItShare PC Host](https://img.shields.io/badge/Companion_Host-ItShare_PC-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/okkysatria/ItShare-pc)
 
-### 🔗 ItShare Ecosystem & Downloads
+The Android client works with the [ItShare PC host](https://github.com/okkysatria/ItShare-pc). Start the host to share a folder and display its QR code, then scan it here or enter the SMB connection details manually.
 
-| Component | Platform | Role | Direct Binary | Source Repository |
-|---|---|---|---|---|
-| **ItShare Android** | Android (API 26+) | Mobile Client | [📱 **Download ItShare.apk**](https://github.com/okkysatria/ItShare-Android/releases/download/v1.0.0/ItShare.apk) | *(This Repository)* |
-| **ItShare PC** | Windows (64-bit) | Host / Server | [📥 **Download ItShare.exe**](https://github.com/okkysatria/ItShare-pc/releases/download/v1.0.0/ItShare.exe) | [🔗 **okkysatria/ItShare-pc**](https://github.com/okkysatria/ItShare-pc) |
+## Screenshots
 
-> **Note**: ItShare requires both sides to work together. Launch the companion **[ItShare PC Host](https://github.com/okkysatria/ItShare-pc)** to share a folder and display the QR code, then scan it with this **Android Client** to browse and download files.
+| Saved folders | Transfer history | Settings |
+|---|---|---|
+| <img src="docs/screenshots/folders.jpg" width="180" alt="Saved folders and sessions"> | <img src="docs/screenshots/transfer-history.jpg" width="180" alt="Transfer history"> | <img src="docs/screenshots/settings.jpg" width="180" alt="Settings"> |
 
----
+| File browser | File selection | Download progress |
+|---|---|---|
+| <img src="docs/screenshots/file-browser.jpg" width="180" alt="SMB file browser"> | <img src="docs/screenshots/file-selection.jpg" width="180" alt="Selecting files for download"> | <img src="docs/screenshots/download-progress.jpg" width="180" alt="Download progress"> |
 
-An Android client designed to connect to the **ItShare PC** host via local SMB (Server Message Block). It allows browsing remote directories, previewing media files inline, and transferring files at local network speeds without third-party cloud infrastructure.
+## Features
 
-The client relies on standard SMB2/SMB3 dialects provided by `com.hierynomus:smbj`.
+- Connect to an ItShare PC share over SMB2/SMB3 using SMBJ.
+- Scan an SMB or Wi-Fi QR code, or enter the SMB host, port, share, username, and password manually.
+- Connect to a host Wi-Fi network from a Wi-Fi QR code when Android permits it. Android 10 and later may show a system confirmation prompt; WEP auto-connect is not supported on Android 10+.
+- Save permanent SMB sessions securely on the device and reconnect later. Expiring QR sessions are not saved as permanent sessions.
+- Browse folders, search the current folder, filter images/videos/documents, and sort by name, size, or date. Choose list or grid layout.
+- Preview images and play videos from the SMB share.
+- Download files and folders to a user-selected Android storage folder, and upload files selected through Android's document picker.
+- Resolve transfer name conflicts by replacing, skipping, or renaming files. Read-only sessions prevent write and delete operations.
+- Track transfer progress, speed, and recent transfer results. A foreground notification supports active transfers in the background and includes a cancel action.
+- Use the interface in English or Indonesian, with system/light/dark theme options.
+- Export and import a JSON backup of saved session details and app settings. Backups do **not** contain SMB passwords or transfer history; reconnect credentials must be provided again after import.
 
----
-
-## Technical Highlights
-
-- **CameraX + ML Kit Scanning**: Zero-latency QR code detection with fallback manual address input dialog.
-- **SMBJ Client Integration**: Uses SMB2/SMB3 over TCP (port `445` or custom ports such as `4455`). Implements custom chunked stream buffering to prevent memory pressure during large file transfers.
-- **EXIF-Aware Thumbnail Pipeline**: Reads image headers over SMB and normalizes orientation using Android's `ExifInterface` and `Matrix.postRotate` prior to Bitmap decoding.
-- **Remote Video Frame Extraction**: Samples remote video streams using `MediaMetadataRetriever` to render accurate file preview thumbnails without downloading full video payloads.
-- **Inline Media Previewing**:
-  - Full-resolution photo viewer dialog with pinch-to-zoom capabilities.
-  - Video playback using `MediaPlayer` backed by a synchronized `TextureView` to maintain source aspect ratios with tap-to-pause controls.
-- **Background Transfer Engine**:
-  - Implements an Android `ForegroundService` (`dataSync` type) with a partial `WakeLock` to prevent process termination by system Doze modes.
-  - Real-time speed calculation (`MB/s` / `KB/s`), progress percentage updates, and explicit user-cancellation signals.
-  - Conflict resolution strategies: *Overwrite*, *Skip*, or *Keep Both*.
-- **Hardware-Backed Session Storage**: Permanent share connections are saved using `androidx.security.crypto.EncryptedSharedPreferences` backed by Android Keystore (`AES256_GCM`).
-
----
-
-## Technical Specifications
-
-- **Minimum SDK**: Android 8.0 (API Level 26)
-- **Target SDK**: Android 15 (API Level 35)
-- **Compile SDK**: 37
-- **Language**: Kotlin 2.0+
-- **UI Framework**: Jetpack Compose, Material 3
-- **Network Stack**: SMBJ 0.15.0, Okio, Java NIO
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- Android Studio Koala Feature Drop / Ladybug (2024.1.2+) or later.
-- JDK 17 or JDK 21 (configured as Gradle JDK).
-- Android device or emulator running API 26 or higher.
-
-### Building from Source
-
-Clone the repository and build via Gradle:
-
-```bash
-git clone https://github.com/your-username/ItShare-Android.git
-cd ItShare-Android
-
-# Build Debug APK
-./gradlew assembleDebug
-
-# Run unit tests
-./gradlew testDebugUnitTest
-```
-
-The compiled APK will be located at:
-`app/build/outputs/apk/debug/app-debug.apk`
-
----
-
-## Runtime Permissions
-
-The application requests the following Android permissions as needed:
-
-| Permission | Purpose |
-|---|---|
-| `CAMERA` | Required to scan host QR codes via ML Kit Barcode API. |
-| `INTERNET` & `ACCESS_NETWORK_STATE` | Required for raw TCP socket communication with the SMB server. |
-| `ACCESS_WIFI_STATE` & `CHANGE_WIFI_STATE` | Required to associate with host PC Wi-Fi hotspots directly. |
-| `ACCESS_FINE_LOCATION` | Required by Android OS (Android 10+) to scan for and connect to Wi-Fi SSIDs. |
-| `FOREGROUND_SERVICE` & `FOREGROUND_SERVICE_DATA_SYNC` | Keeps large file transfers alive when the app is in the background. |
-| `POST_NOTIFICATIONS` | Required on Android 13+ to display ongoing transfer notifications. |
-
----
-
-## Project Structure
+## Project layout
 
 ```text
-ItShare-Android/
+.
 ├── app/
-│   ├── build.gradle.kts     # Module-level Gradle configuration & dependencies
+│   ├── build.gradle.kts
 │   └── src/
 │       ├── main/
 │       │   ├── AndroidManifest.xml
 │       │   ├── java/com/itshare/client/
+│       │   │   ├── MainActivity.kt             # App state, screen routing, and UI-to-core actions
+│       │   │   ├── ItShareApp.kt               # Android Application entry point
 │       │   │   ├── core/
-│       │   │   │   ├── backup/        # Session export and import logic
-│       │   │   │   ├── model/         # SmbFileItem, QR payloads, transfer models
-│       │   │   │   ├── qr/            # JSON schema validation and parsing
-│       │   │   │   ├── security/      # EncryptedSharedPreferences wrapper
-│       │   │   │   ├── service/       # TransferForegroundService implementation
-│       │   │   │   ├── smb/           # SmbClientManager & connection pooling
-│       │   │   │   ├── transfer/      # TransferManager, chunking, and speed meters
-│       │   │   │   └── wifi/          # WifiNetworkSpecifier auto-connect handler
-│       │   │   ├── ui/
-│       │   │   │   ├── browser/       # FileBrowserScreen, MediaPreviewDialog, SmbMediaLoader
-│       │   │   │   ├── onboarding/    # Main navigation tabs, history, settings screen
-│       │   │   │   ├── scanner/       # CameraX preview and manual IP entry modal
-│       │   │   │   └── theme/         # Color schemes, typography, and shape definitions
-│       │   │   ├── MainActivity.kt    # Root Compose host activity
-│       │   │   └── ItShareApp.kt      # Application entrypoint
-│       │   └── res/                   # Drawables, strings, and XML configurations
-│       └── test/                      # Unit tests (QR parser, backup serializations)
-├── gradle/                  # Gradle wrapper binary and configuration
-├── build.gradle.kts         # Root build script
-├── settings.gradle.kts      # Project naming and repository resolutions
+│       │   │   │   ├── backup/                 # JSON settings/session backup
+│       │   │   │   ├── model/                  # SMB/Wi-Fi payloads and file/transfer models
+│       │   │   │   ├── qr/                     # QR payload parsing and validation
+│       │   │   │   ├── security/               # Encrypted saved SMB sessions
+│       │   │   │   ├── service/                # Foreground transfer notification/service
+│       │   │   │   ├── smb/                    # SMB connection, browsing, and file operations
+│       │   │   │   ├── transfer/               # Upload/download, conflict handling, history
+│       │   │   │   └── wifi/                   # Wi-Fi QR connection flow
+│       │   │   └── ui/
+│       │   │       ├── browser/                # File browser and image/video preview
+│       │   │       ├── onboarding/             # Folders, transfer history, settings
+│       │   │       ├── scanner/                # Camera QR scanner and manual SMB form
+│       │   │       └── theme/                  # Compose theme and layout helpers
+│       │   ├── res/                            # App strings and image assets
+│       │   └── ...
+│       └── test/                               # QR parser and backup unit tests
+├── gradle/
+│   └── libs.versions.toml                      # Dependency and plugin versions
+├── build.gradle.kts
+├── settings.gradle.kts
 └── README.md
 ```
 
----
+## Requirements
 
-## License
+- Android Studio with Android SDK Platform 37 (the configured `compileSdk`).
+- JDK 17.
+- Android 8.0 (API 26) or later (`minSdk = 26`).
+- A reachable ItShare PC host with an SMB share and valid credentials.
 
-This project is distributed under the MIT License.
+The current app configuration uses `targetSdk = 35`, `versionName = 1.0.0`, and `versionCode = 1`. Main dependencies include Jetpack Compose/Material 3, CameraX, Google ML Kit barcode scanning, SMBJ 0.15.0, Kotlin serialization, AndroidX Security Crypto, and coroutines. Dependency versions are maintained in `gradle/libs.versions.toml`.
+
+## Permissions
+
+The manifest declares the following permissions/features. Android prompts for permissions at runtime where required by the OS:
+
+| Permission | Use |
+|---|---|
+| `INTERNET`, `ACCESS_NETWORK_STATE` | Connect to the SMB host and inspect network connectivity. |
+| `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE` | Wi-Fi connection support. |
+| `ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`, `NEARBY_WIFI_DEVICES` | Wi-Fi connection flow on Android versions that require them. |
+| `CAMERA` | Scan QR codes. Camera hardware is optional; manual connection is available without it. |
+| `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `WAKE_LOCK` | Keep a user-started transfer active while the app is in the background. |
+| `POST_NOTIFICATIONS` | Transfer notification support on Android versions that require notification permission. |
+
+The Android system controls some Wi-Fi connection behavior, including network selection prompts and permission requirements, and behavior can differ by OS version and device manufacturer.
+
+## Build
+
+On Windows, build a debug APK from the project root:
+
+```powershell
+.\gradlew.bat assembleDebug
+```
+
+On macOS/Linux:
+
+```bash
+./gradlew assembleDebug
+```
+
+The debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
+
+## Unit tests
+
+Run the local unit tests with:
+
+```powershell
+.\gradlew.bat testDebugUnitTest
+```
+
+Or on macOS/Linux:
+
+```bash
+./gradlew testDebugUnitTest
+```
+
+Current unit tests cover QR payload parsing and backup serialization/validation.
+
+## Companion host
+
+The Android client needs the ItShare PC host to publish a folder and provide connection details. See the [ItShare PC repository](https://github.com/okkysatria/ItShare-pc) for the host application and setup.
