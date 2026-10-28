@@ -1,7 +1,6 @@
 # ItShare Android
 
 [![Download ItShare APK](https://img.shields.io/badge/Download-ItShare_v1.0.0_(Android_APK)-34A853?style=for-the-badge&logo=android&logoColor=white)](https://github.com/okkysatria/ItShare-Android/releases/download/v1.0.0/ItShare.apk)
-[![GitHub Release](https://img.shields.io/github/v/release/okkysatria/ItShare-Android?style=for-the-badge&color=blue)](https://github.com/okkysatria/ItShare-Android/releases/latest)
 [![ItShare PC Host](https://img.shields.io/badge/Companion_Host-ItShare_PC-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/okkysatria/ItShare-pc)
 
 The Android client works with the [ItShare PC host](https://github.com/okkysatria/ItShare-pc). Start the host to share a folder and display its QR code, then scan it here or enter the SMB connection details manually.
@@ -122,6 +121,3 @@ Or on macOS/Linux:
 
 Current unit tests cover QR payload parsing and backup serialization/validation.
 
-## Companion host
-
-The Android client needs the ItShare PC host to publish a folder and provide connection details. See the [ItShare PC repository](https://github.com/okkysatria/ItShare-pc) for the host application and setup.
