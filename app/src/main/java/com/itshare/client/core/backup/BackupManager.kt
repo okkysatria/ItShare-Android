@@ -42,15 +42,23 @@ object BackupManager {
     fun importBackupJson(
         jsonString: String,
         existingHistory: List<SessionHistoryItem>
-    ): Result<List<SessionHistoryItem>> {
+    ): Result<AppBackupData> {
         return runCatching {
             val backup = json.decodeFromString(AppBackupData.serializer(), jsonString)
             if (backup.version != 1) {
                 throw IllegalArgumentException("Versi backup tidak didukung: v${backup.version}")
             }
 
-            val combined = (existingHistory + backup.history).distinctBy { "${it.host}:${it.port}:${it.share}" }
-            combined
+            backup.history.forEach { item ->
+                require(item.host.isNotBlank()) { "Alamat host kosong pada berkas cadangan" }
+                require(item.port in 1..65535) { "Port tidak valid pada berkas cadangan: ${item.port}" }
+                require(item.share.isNotBlank()) { "Nama share kosong pada berkas cadangan" }
+                require(item.lastConnectedEpoch >= 0L) { "Waktu koneksi tidak valid pada berkas cadangan" }
+            }
+            val combined = (existingHistory + backup.history).distinctBy {
+                "${it.host.lowercase()}:${it.port}:${it.share.lowercase()}"
+            }
+            backup.copy(history = combined)
         }
     }
 }

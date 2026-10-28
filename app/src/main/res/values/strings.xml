@@ -7,8 +7,8 @@
     <string name="camera_permission_required">Izin kamera diperlukan untuk memindai kode QR</string>
     <string name="grant_permission">Berikan Izin</string>
     <string name="manual_input">Input Manual</string>
-    <string name="connecting">Menghubungkan ke folder share...</string>
-    <string name="connecting_wifi">Menghubungkan ke WiFi...</string>
+    <string name="connecting">Menghubungkan ke folder share…</string>
+    <string name="connecting_wifi">Menghubungkan ke WiFi…</string>
     <string name="wifi_connected_prompt">WiFi terhubung! Lanjutkan untuk memindai QR Folder Share?</string>
     <string name="continue_scan_share">Pindai Folder Share</string>
     <string name="session_expired">Sesi telah kedaluwarsa atau dihentikan oleh PC.</string>

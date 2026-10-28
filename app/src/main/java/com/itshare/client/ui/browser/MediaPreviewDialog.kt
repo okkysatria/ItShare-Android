@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.media.MediaDataSource
 import android.media.MediaPlayer
 import android.graphics.SurfaceTexture
+import android.util.Log
 import android.view.Surface as AndroidSurface
 import android.view.TextureView
 import androidx.activity.compose.BackHandler
@@ -36,7 +37,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.itshare.client.core.model.SmbFileItem
 import com.itshare.client.ui.uiText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.milliseconds
 
 @Composable
 internal fun MediaPreviewDialog(
@@ -53,22 +56,26 @@ internal fun MediaPreviewDialog(
     var loading by remember(item.path) { mutableStateOf(true) }
     var error by remember(item.path) { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(item.path) {
+    LaunchedEffect(item.path, item.sizeBytes, item.lastModifiedEpoch) {
         loading = true
         error = null
-        runCatching {
-            if (item.isImageFile()) {
-                bitmap = onLoadImage(item)
-            } else {
-                source = onCreateMediaSource(item)
+        try {
+            when {
+                item.isImageFile() -> bitmap = onLoadImage(item)
+                item.isVideoFile() -> source = onCreateMediaSource(item)
+                else -> error = uiText(language, "This file type cannot be previewed.", "Jenis berkas ini tidak bisa dipratinjau.")
             }
-        }.onFailure {
-            error = it.localizedMessage ?: "Unable to open media"
+            if (item.isImageFile() && bitmap == null && error == null) {
+                error = uiText(language, "Image could not be decoded.", "Gambar tidak dapat dibuka.")
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            error = failure.localizedMessage
+                ?: uiText(language, "Unable to open media.", "Media tidak dapat dibuka.")
+        } finally {
+            loading = false
         }
-        if (item.isImageFile() && bitmap == null && error == null) {
-            error = uiText(language, "Image could not be decoded.", "Gambar tidak dapat dibuka.")
-        }
-        loading = false
     }
 
     DisposableEffect(item.path) {
@@ -83,7 +90,7 @@ internal fun MediaPreviewDialog(
     ) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = Color.Black
+            color = MaterialTheme.colorScheme.background
         ) {
             Column(Modifier.fillMaxSize()) {
 
@@ -134,11 +141,15 @@ internal fun MediaPreviewDialog(
                     }
                     Spacer(Modifier.width(4.dp))
                 }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f))
 
                 Box(
                     Modifier
-                        .fillMaxSize()
-                        .background(Color.Black),
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentAlignment = Alignment.Center
                 ) {
                     when {
@@ -151,34 +162,41 @@ internal fun MediaPreviewDialog(
                                 Spacer(Modifier.height(12.dp))
                                 Text(
                                     uiText(language, "Opening media…", "Membuka media…"),
-                                    color = Color.White
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                         error != null -> {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                tonalElevation = 3.dp,
                                 modifier = Modifier.padding(24.dp)
                             ) {
-                                Icon(
-                                    Icons.Default.ErrorOutline,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(48.dp)
-                                )
-                                Spacer(Modifier.height(12.dp))
-                                Text(
-                                    error!!,
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                if (onDownloadClicked != null) {
-                                    Spacer(Modifier.height(16.dp))
-                                    Button(onClick = onDownloadClicked) {
-                                        Icon(Icons.Default.Download, contentDescription = null)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(uiText(language, "Download file instead", "Unduh berkas saja"))
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center,
+                                    modifier = Modifier.padding(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.ErrorOutline,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                    Spacer(Modifier.height(12.dp))
+                                    Text(
+                                        error!!,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    if (onDownloadClicked != null) {
+                                        Spacer(Modifier.height(16.dp))
+                                        Button(onClick = onDownloadClicked) {
+                                            Icon(Icons.Default.Download, contentDescription = null)
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(uiText(language, "Download file instead", "Unduh berkas saja"))
+                                        }
                                     }
                                 }
                             }
@@ -263,9 +281,21 @@ private fun SmbVideoPlayer(
     var videoWidth by remember(source) { mutableIntStateOf(0) }
     var videoHeight by remember(source) { mutableIntStateOf(0) }
 
-    fun safeAttachSurface(p: MediaPlayer?, s: AndroidSurface?) {
-        if (p != null && s != null && s.isValid) {
-            runCatching { p.setSurface(s) }
+    fun setPlaybackFailure(error: Exception) {
+        Log.e("ItShareMedia", "Video playback failed", error)
+        failure = error.localizedMessage
+            ?: uiText(language, "Playback failed", "Gagal memutar video")
+        playing = false
+    }
+
+    fun safeAttachSurface(p: MediaPlayer?, s: AndroidSurface?): Boolean {
+        if (p == null || s == null || !s.isValid) return false
+        return try {
+            p.setSurface(s)
+            true
+        } catch (error: Exception) {
+            setPlaybackFailure(error)
+            false
         }
     }
 
@@ -279,9 +309,13 @@ private fun SmbVideoPlayer(
                 duration = mp.duration.coerceAtLeast(0)
                 videoWidth = mp.videoWidth
                 videoHeight = mp.videoHeight
-                safeAttachSurface(mp, videoSurface)
-                mp.start()
-                playing = true
+                try {
+                    if (videoSurface != null && !safeAttachSurface(mp, videoSurface)) return@setOnPreparedListener
+                    mp.start()
+                    playing = true
+                } catch (error: Exception) {
+                    setPlaybackFailure(error)
+                }
             }
             mediaPlayer.setOnVideoSizeChangedListener { _, w, h ->
                 if (w > 0 && h > 0) {
@@ -294,20 +328,21 @@ private fun SmbVideoPlayer(
                 position = duration
             }
             mediaPlayer.setOnErrorListener { _, what, extra ->
+                Log.e("ItShareMedia", "Video playback failed (code $what/$extra)")
                 failure = "${uiText(language, "Playback failed", "Gagal memutar video")} (Code $what/$extra)"
                 playing = false
                 true
             }
             mediaPlayer.prepareAsync()
         } catch (error: Exception) {
-            failure = error.localizedMessage ?: uiText(language, "Playback failed", "Gagal memutar video")
+            setPlaybackFailure(error)
         }
 
         onDispose {
-            runCatching {
-                if (mediaPlayer.isPlaying) mediaPlayer.stop()
-                mediaPlayer.release()
-            }
+            // isPlaying/stop can throw when asynchronous preparation failed. Always
+            // release the decoder independently so a failed preview cannot leak it.
+            runCatching { mediaPlayer.setSurface(null) }
+            runCatching { mediaPlayer.release() }
             player = null
             runCatching { videoSurface?.release() }
             videoSurface = null
@@ -318,9 +353,13 @@ private fun SmbVideoPlayer(
     LaunchedEffect(prepared, playing) {
         while (prepared && playing) {
             player?.let {
-                position = it.currentPosition.coerceAtLeast(0)
+                try {
+                    position = it.currentPosition.coerceAtLeast(0)
+                } catch (error: Exception) {
+                    setPlaybackFailure(error)
+                }
             }
-            delay(350)
+            delay(350.milliseconds)
         }
     }
 
@@ -337,12 +376,20 @@ private fun SmbVideoPlayer(
                 .clickable {
                     player?.let {
                         if (playing) {
-                            it.pause()
-                            playing = false
+                            try {
+                                it.pause()
+                                playing = false
+                            } catch (error: Exception) {
+                                setPlaybackFailure(error)
+                            }
                         } else if (prepared) {
-                            if (position >= duration - 300) it.seekTo(0)
-                            it.start()
-                            playing = true
+                            try {
+                                if (position >= duration - 300) it.seekTo(0)
+                                it.start()
+                                playing = true
+                            } catch (error: Exception) {
+                                setPlaybackFailure(error)
+                            }
                         }
                     }
                 },
@@ -361,6 +408,7 @@ private fun SmbVideoPlayer(
                     TextureView(context).apply {
                         surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                             override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+                                runCatching { videoSurface?.release() }
                                 AndroidSurface(texture).also { surface ->
                                     videoSurface = surface
                                     safeAttachSurface(player, surface)
@@ -368,6 +416,7 @@ private fun SmbVideoPlayer(
                             }
                             override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) = Unit
                             override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+                                runCatching { player?.setSurface(null) }
                                 runCatching { videoSurface?.release() }
                                 videoSurface = null
                                 return true
@@ -401,30 +450,34 @@ private fun SmbVideoPlayer(
             }
 
             if (failure != null) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(16.dp))
-                        .padding(24.dp)
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 4.dp
                 ) {
-                    Icon(
-                        Icons.Default.ErrorOutline,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(44.dp)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        failure!!,
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    if (onDownloadFallback != null) {
-                        Spacer(Modifier.height(14.dp))
-                        Button(onClick = onDownloadFallback) {
-                            Icon(Icons.Default.Download, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(uiText(language, "Download to watch", "Unduh untuk menonton"))
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.ErrorOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(44.dp)
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            failure!!,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        if (onDownloadFallback != null) {
+                            Spacer(Modifier.height(14.dp))
+                            Button(onClick = onDownloadFallback) {
+                                Icon(Icons.Default.Download, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(uiText(language, "Download to watch", "Unduh untuk menonton"))
+                            }
                         }
                     }
                 }
@@ -434,6 +487,7 @@ private fun SmbVideoPlayer(
         Surface(
             tonalElevation = 6.dp,
             color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(

@@ -27,15 +27,16 @@ import com.itshare.client.ui.uiText
 @Composable
 fun ManualInputDialog(
     language: String = "en",
+    initialPayload: SmbPayload? = null,
     onDismiss: () -> Unit,
     onConnect: (SmbPayload) -> Unit
 ) {
-    var host by remember { mutableStateOf("") }
-    var port by remember { mutableStateOf("445") }
-    var share by remember { mutableStateOf("") }
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var isReadOnly by remember { mutableStateOf(false) }
+    var host by remember(initialPayload) { mutableStateOf(initialPayload?.host.orEmpty()) }
+    var port by remember(initialPayload) { mutableStateOf(initialPayload?.port?.toString() ?: "445") }
+    var share by remember(initialPayload) { mutableStateOf(initialPayload?.share.orEmpty()) }
+    var username by remember(initialPayload) { mutableStateOf(initialPayload?.user.orEmpty()) }
+    var password by remember(initialPayload) { mutableStateOf(initialPayload?.pass.orEmpty()) }
+    var isReadOnly by remember(initialPayload) { mutableStateOf(initialPayload?.readOnly ?: false) }
     var passwordVisible by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -137,7 +138,7 @@ fun ManualInputDialog(
                                 else -> onConnect(SmbPayload(version = 1, host = host.trim(), port = portNumber, share = share.trim(), user = username.trim(), pass = password, readOnly = isReadOnly, expEpoch = null))
                             }
                         },
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp).height(50.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp).height(48.dp),
                         shape = RoundedCornerShape(14.dp)
                     ) { Text(uiText(language, "Connect", "Sambungkan"), fontWeight = FontWeight.SemiBold) }
                 }

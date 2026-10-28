@@ -3,16 +3,20 @@
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.media.ExifInterface
+import android.graphics.ImageDecoder
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.util.Log
 import android.util.LruCache
+import androidx.core.graphics.scale
+import androidx.exifinterface.media.ExifInterface
 import com.itshare.client.core.model.SmbFileItem
 import com.itshare.client.core.smb.SmbClientManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileOutputStream
 
 private val thumbnailCache = object : LruCache<String, Bitmap>(32 * 1024 * 1024) {
     override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
@@ -35,7 +39,7 @@ internal suspend fun loadSmbThumbnail(
 ): Bitmap? = withContext(Dispatchers.IO) {
     try {
         val payload = smb.getActivePayload()
-        val cacheKey = "${payload?.host}/${payload?.share}/${item.path}:${item.sizeBytes}:${item.lastModifiedEpoch}"
+        val cacheKey = "${payload?.host}:${payload?.port}/${payload?.share}/${item.path}:${item.sizeBytes}:${item.lastModifiedEpoch}:$maxDimensionPx"
         thumbnailCache.get(cacheKey)?.let { return@withContext it }
 
         val thumbnail: Bitmap? = if (item.isImageFile()) {
@@ -49,6 +53,7 @@ internal suspend fun loadSmbThumbnail(
         }
         thumbnail
     } catch (error: Exception) {
+        if (error is CancellationException) throw error
         Log.e("ItShareMedia", "Thumbnail load failed for ${item.path}", error)
         null
     }
@@ -62,33 +67,7 @@ private suspend fun decodeImageThumbnail(
     val streamResult = smb.openReadStream(item.path)
     if (streamResult.isFailure) return null
 
-    val bytes = runCatching {
-        streamResult.getOrThrow().use { it.readBytes() }
-    }.getOrNull() ?: return null
-
-    if (bytes.isEmpty()) return null
-
-    return try {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-            Log.w("ItShareMedia", "Unreadable bounds for thumbnail: ${item.path}")
-            return null
-        }
-
-        val sample = sampleSize(bounds.outWidth, bounds.outHeight, maxDimensionPx)
-        val decodeOptions = BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-
-        val rawBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions) ?: return null
-        fixOrientation(rawBitmap, bytes)
-    } catch (e: Exception) {
-        Log.e("ItShareMedia", "Error decoding thumbnail for ${item.path}", e)
-        null
-    }
+    return decodeRemoteImage(item, streamResult.getOrThrow(), maxDimensionPx)
 }
 
 private suspend fun decodeVideoThumbnail(
@@ -124,11 +103,10 @@ private suspend fun decodeVideoThumbnail(
 
         if (frame != null && maxOf(frame.width, frame.height) > maxDimensionPx) {
             val ratio = maxDimensionPx.toFloat() / maxOf(frame.width, frame.height)
-            val scaled = Bitmap.createScaledBitmap(
-                frame,
+            val scaled = frame.scale(
                 (frame.width * ratio).toInt().coerceAtLeast(1),
                 (frame.height * ratio).toInt().coerceAtLeast(1),
-                true
+                filter = true
             )
             if (scaled != frame) frame.recycle()
             scaled
@@ -136,6 +114,7 @@ private suspend fun decodeVideoThumbnail(
             frame
         }
     } catch (e: Exception) {
+        if (e is CancellationException) throw e
         Log.e("ItShareMedia", "Video thumbnail extraction failed for ${item.path}", e)
         null
     } finally {
@@ -148,37 +127,63 @@ internal suspend fun loadSmbFullImage(smb: SmbClientManager, item: SmbFileItem):
     try {
         val streamResult = smb.openReadStream(item.path)
         if (streamResult.isFailure) return@withContext null
-
-        val bytes = runCatching {
-            streamResult.getOrThrow().use { it.readBytes() }
-        }.getOrNull() ?: return@withContext null
-
-        if (bytes.isEmpty()) return@withContext null
-
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-            Log.w("ItShareMedia", "Cannot decode image bounds for ${item.path}")
-            return@withContext null
-        }
-
-        val options = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, 2560)
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-
-        val rawBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return@withContext null
-        fixOrientation(rawBitmap, bytes)
+        decodeRemoteImage(item, streamResult.getOrThrow(), 2560)
     } catch (error: Exception) {
+        if (error is CancellationException) throw error
         Log.e("ItShareMedia", "Full image preview failed for ${item.path}", error)
         null
     }
 }
 
-private fun fixOrientation(bitmap: Bitmap, bytes: ByteArray): Bitmap {
+private fun decodeRemoteImage(
+    item: SmbFileItem,
+    input: java.io.InputStream,
+    maxDimensionPx: Int
+): Bitmap? {
+    val tempFile = File.createTempFile("itshare_image_", ".cache")
+    try {
+        input.use { source ->
+            FileOutputStream(tempFile).use { target -> source.copyTo(target, 128 * 1024) }
+        }
+        if (tempFile.length() == 0L) return null
+        // Use the bytes actually received as the source of truth. SMB directory
+        // metadata may be stale while a file is being replaced or uploaded; rejecting
+        // a fully decodable image because its old listing size differs breaks preview.
+
+        if (Build.VERSION.SDK_INT >= 28) {
+            runCatching {
+                ImageDecoder.decodeBitmap(ImageDecoder.createSource(tempFile)) { decoder, info, _ ->
+                    val width = info.size.width
+                    val height = info.size.height
+                    val scale = maxDimensionPx.toFloat() / maxOf(width, height).coerceAtLeast(1)
+                    val targetWidth = (width * minOf(scale, 1f)).toInt().coerceAtLeast(1)
+                    val targetHeight = (height * minOf(scale, 1f)).toInt().coerceAtLeast(1)
+                    decoder.setTargetSize(targetWidth, targetHeight)
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                }
+            }.getOrNull()?.let { return it }
+        }
+
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(tempFile.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            Log.w("ItShareMedia", "Unreadable image bounds: ${item.path}")
+            return null
+        }
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxDimensionPx)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val bitmap = BitmapFactory.decodeFile(tempFile.absolutePath, options) ?: return null
+        return fixOrientation(bitmap, tempFile)
+    } finally {
+        tempFile.delete()
+    }
+}
+
+private fun fixOrientation(bitmap: Bitmap, file: File): Bitmap {
     val orientation = runCatching {
-        val exif = ExifInterface(ByteArrayInputStream(bytes))
+        val exif = ExifInterface(file.absolutePath)
         exif.getAttributeInt(
             ExifInterface.TAG_ORIENTATION,
             ExifInterface.ORIENTATION_NORMAL

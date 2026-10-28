@@ -1,10 +1,10 @@
 package com.itshare.client.core.security
 
 import android.content.Context
+import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.itshare.client.core.model.SmbPayload
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 class SecureSessionStore(context: Context) {
@@ -23,19 +23,27 @@ class SecureSessionStore(context: Context) {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun savePermanentSession(payload: SmbPayload) {
+    fun savePermanentSession(
+        payload: SmbPayload,
+        lastConnectedEpoch: Long = System.currentTimeMillis() / 1000
+    ) {
         if (payload.expEpoch != null && payload.expEpoch > 0) return
         val key = "${payload.host}:${payload.port}:${payload.share}"
-        val serialized = json.encodeToString(payload)
-        sharedPreferences.edit().putString(key, serialized).apply()
+        val serialized = json.encodeToString(SmbPayload.serializer(), payload)
+        sharedPreferences.edit {
+            putString(key, serialized)
+            putLong(lastConnectedKey(key), lastConnectedEpoch.coerceAtLeast(0L))
+        }
     }
 
     fun getAllSavedSessions(): List<SmbPayload> {
         val list = mutableListOf<SmbPayload>()
-        for ((_, value) in sharedPreferences.all) {
-            if (value is String) {
+        for ((key, value) in sharedPreferences.all) {
+            if (!key.startsWith(LAST_CONNECTED_PREFIX) && value is String) {
                 runCatching {
-                    list.add(json.decodeFromString<SmbPayload>(value))
+                    val payload = json.decodeFromString<SmbPayload>(value)
+                    val sessionKey = "${payload.host}:${payload.port}:${payload.share}"
+                    list.add(payload.copy(lastConnectedEpoch = sharedPreferences.getLong(lastConnectedKey(sessionKey), 0L)))
                 }
             }
         }
@@ -44,10 +52,15 @@ class SecureSessionStore(context: Context) {
 
     fun removeSession(payload: SmbPayload) {
         val key = "${payload.host}:${payload.port}:${payload.share}"
-        sharedPreferences.edit().remove(key).apply()
+        sharedPreferences.edit {
+            remove(key)
+            remove(lastConnectedKey(key))
+        }
     }
 
-    fun clearAll() {
-        sharedPreferences.edit().clear().apply()
+    private fun lastConnectedKey(sessionKey: String): String = "$LAST_CONNECTED_PREFIX$sessionKey"
+
+    private companion object {
+        const val LAST_CONNECTED_PREFIX = "last_connected:"
     }
 }

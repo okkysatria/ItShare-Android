@@ -7,6 +7,10 @@ import android.provider.OpenableColumns
 import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
+import androidx.core.content.edit
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import com.itshare.client.core.model.ConflictResolution
 import com.itshare.client.core.model.SmbFileItem
 import com.itshare.client.core.service.TransferForegroundService
@@ -16,22 +20,30 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.Locale
 
+@Serializable
 data class CompletedTransferItem(
     val fileName: String,
     val sizeBytes: Long,
     val isDownload: Boolean,
     val timestampEpoch: Long = System.currentTimeMillis() / 1000,
-    val isSuccess: Boolean = true
+    val isSuccess: Boolean = true,
+    val locationPath: String = ""
 )
 
+@Serializable
 data class CompletedTransferGroup(
     val id: Long = System.currentTimeMillis(),
     val isDownload: Boolean,
     val items: List<CompletedTransferItem>,
+    val shareName: String = "",
+    val serverAddress: String = "",
+    val remoteFolderPath: String = "",
+    val localFolderName: String = "",
     val timestampEpoch: Long = System.currentTimeMillis() / 1000
 )
 
@@ -47,7 +59,9 @@ data class TransferProgress(
     val recentTransfers: List<CompletedTransferGroup> = emptyList()
 ) {
     val progressPercent: Int
-        get() = if (totalBytes > 0) ((bytesTransferred * 100) / totalBytes).toInt().coerceIn(0, 100) else 0
+        get() = if (totalBytes > 0) {
+            ((bytesTransferred.toDouble() / totalBytes.toDouble()) * 100.0).toInt().coerceIn(0, 100)
+        } else 0
 }
 
 class TransferManager(
@@ -55,8 +69,14 @@ class TransferManager(
     private val smbManager: SmbClientManager
 ) {
     private val context = context.applicationContext
-    private val _progressState = MutableStateFlow(TransferProgress())
+    private val historyPreferences = this.context.getSharedPreferences("itshare_transfer_history", Context.MODE_PRIVATE)
+    private val historyJson = Json { ignoreUnknownKeys = true }
+    private val historyLock = Any()
+    private val transferMutex = Mutex()
+    private val _progressState = MutableStateFlow(TransferProgress(recentTransfers = loadRecentTransfers()))
     val progressState: StateFlow<TransferProgress> = _progressState.asStateFlow()
+
+    fun isTransferRunning(): Boolean = transferMutex.isLocked
 
     private var lastNotificationUpdateMs = 0L
 
@@ -66,6 +86,7 @@ class TransferManager(
             isTransferring = false,
             speedBytesPerSec = 0L
         )
+        stopService()
     }
 
     suspend fun downloadFiles(
@@ -73,8 +94,20 @@ class TransferManager(
         targetTreeUri: Uri,
         defaultConflict: ConflictResolution = ConflictResolution.RENAME
     ): Result<Int> = withContext(Dispatchers.IO) {
+        if (!transferMutex.tryLock()) {
+            return@withContext Result.failure(IllegalStateException("Transfer lain sedang berjalan"))
+        }
+        try {
         runCatching {
             TransferCancellationSignal.reset()
+            _progressState.value = TransferProgress(
+                isTransferring = true,
+                isDownload = true,
+                currentFileName = items.firstOrNull()?.name.orEmpty(),
+                fileIndex = 0,
+                totalFiles = items.size,
+                recentTransfers = _progressState.value.recentTransfers
+            )
             val rootDir = DocumentFile.fromTreeUri(context, targetTreeUri)
                 ?: throw IllegalArgumentException("Direktori tujuan tidak valid atau tidak memiliki akses")
 
@@ -111,6 +144,7 @@ class TransferManager(
             var transferredBytesTotal = 0L
             var completedCount = 0
             val completedItems = mutableListOf<CompletedTransferItem>()
+            val failedItems = mutableListOf<Pair<String, Exception>>()
 
             startService(allFilesToDownload.firstOrNull()?.first?.name ?: "Download", totalBytes)
             try {
@@ -124,14 +158,6 @@ class TransferManager(
                         continue
                     }
 
-                    val parentDirRelative = pair.second.substringBeforeLast('/', "")
-                    val targetDir = if (parentDirRelative.isEmpty()) rootDir else findOrCreateDir(rootDir, parentDirRelative)
-                    val targetFileName = resolveLocalFileName(targetDir, item.name, defaultConflict) ?: continue
-
-                    val mimeType = getMimeType(targetFileName)
-                    val destFile = targetDir.createFile(mimeType, targetFileName)
-                        ?: throw IllegalStateException("Gagal membuat berkas lokal: $targetFileName")
-
                     _progressState.value = TransferProgress(
                         isTransferring = true,
                         isDownload = true,
@@ -143,12 +169,27 @@ class TransferManager(
                         recentTransfers = _progressState.value.recentTransfers
                     )
 
+                    val parentDirRelative = pair.second.substringBeforeLast('/', "")
+                    val targetDir = if (parentDirRelative.isEmpty()) rootDir else findOrCreateDir(rootDir, parentDirRelative)
+                    val targetFileName = resolveLocalFileName(targetDir, item.name, defaultConflict) ?: continue
+                    val previousTarget = if (defaultConflict == ConflictResolution.OVERWRITE) {
+                        targetDir.findFile(targetFileName)
+                    } else null
+                    if (previousTarget?.isDirectory == true) {
+                        throw IllegalStateException("Tidak dapat menimpa folder dengan berkas: $targetFileName")
+                    }
+
+                    val mimeType = getMimeType(targetFileName)
+                    val stagedName = if (previousTarget != null) ".itshare-part-${System.nanoTime()}" else targetFileName
+                    val destFile = targetDir.createFile(mimeType, stagedName)
+                        ?: throw IllegalStateException("Gagal membuat berkas lokal: $targetFileName")
+
                     try {
                         val inStream = smbManager.openReadStream(item.path).getOrThrow()
                         try {
                             val outStream = context.contentResolver.openOutputStream(destFile.uri)
                                 ?: throw IllegalStateException("Gagal membuka stream tulis lokal")
-                            copyStreamWithProgress(inStream, outStream, expectedBytes = item.sizeBytes.takeIf { it > 0L }) { bytesChunk, speed ->
+                            copyStreamWithProgress(inStream, outStream, expectedBytes = item.sizeBytes.takeIf { it >= 0L }) { bytesChunk, speed ->
                                 transferredBytesTotal += bytesChunk
                                 _progressState.value = _progressState.value.copy(
                                     bytesTransferred = transferredBytesTotal,
@@ -162,17 +203,38 @@ class TransferManager(
                         }
                         if (TransferCancellationSignal.isCancelled()) throw IllegalStateException("Transfer dibatalkan")
 
+                        if (previousTarget != null) {
+                            val backupName = ".itshare-backup-${System.nanoTime()}"
+                            if (!previousTarget.renameTo(backupName)) {
+                                throw IllegalStateException("Tidak dapat mengamankan berkas lama sebelum menimpa: $targetFileName")
+                            }
+                            if (!destFile.renameTo(targetFileName)) {
+                                val backup = targetDir.findFile(backupName)
+                                val restored = backup?.renameTo(targetFileName) == true
+                                if (!restored) {
+                                    Log.e("ItShareTransfer", "Berkas lama tersimpan sebagai '$backupName' karena pemulihan nama gagal")
+                                }
+                                throw IllegalStateException("Tidak dapat mengganti berkas lama: $targetFileName")
+                            }
+                            targetDir.findFile(backupName)?.let { backup ->
+                                if (!backup.delete()) Log.w("ItShareTransfer", "Berkas cadangan sementara tertinggal: '$backupName'")
+                            }
+                        }
+
                         completedCount++
                         val completedItem = CompletedTransferItem(
                             fileName = item.name,
                             sizeBytes = item.sizeBytes,
                             isDownload = true,
-                            isSuccess = true
+                            isSuccess = true,
+                            locationPath = item.path
                         )
                         completedItems += completedItem
-                    } catch (error: Throwable) {
+                    } catch (error: Exception) {
                         Log.e("ItShareTransfer", "Download failed for '${item.path}' (${item.sizeBytes} bytes)", error)
-                        runCatching { destFile.delete() }
+                        if (!runCatching { destFile.delete() }.getOrDefault(false)) {
+                            Log.e("ItShareTransfer", "Could not remove partial download '${destFile.name}'")
+                        }
                         if (TransferCancellationSignal.isCancelled()) {
                             throw IllegalStateException("Transfer dibatalkan")
                         }
@@ -180,20 +242,38 @@ class TransferManager(
                             fileName = item.name,
                             sizeBytes = item.sizeBytes,
                             isDownload = true,
-                            isSuccess = false
+                            isSuccess = false,
+                            locationPath = item.path
                         )
+                        failedItems += item.name to error
                     }
                 }
 
+                if (failedItems.isNotEmpty()) {
+                    val firstFailure = failedItems.first()
+                    throw java.io.IOException(
+                        "${failedItems.size} berkas gagal diunduh; ${firstFailure.first}: ${firstFailure.second.localizedMessage ?: "kesalahan SMB"}",
+                        firstFailure.second
+                    )
+                }
                 completedCount
             } finally {
                 if (completedItems.isNotEmpty()) {
-                    val group = CompletedTransferGroup(isDownload = true, items = completedItems.toList())
-                    _progressState.value = _progressState.value.copy(recentTransfers = listOf(group) + _progressState.value.recentTransfers.take(19))
+                    val group = createTransferGroup(
+                        isDownload = true,
+                        items = completedItems.toList(),
+                        localFolderName = rootDir.name.orEmpty()
+                    )
+                    recordCompletedGroup(group)
                 }
                 stopService()
                 _progressState.value = _progressState.value.copy(isTransferring = false, speedBytesPerSec = 0L)
             }
+        }.onFailure {
+            _progressState.value = _progressState.value.copy(isTransferring = false, speedBytesPerSec = 0L)
+        }
+        } finally {
+            transferMutex.unlock()
         }
     }
 
@@ -202,8 +282,20 @@ class TransferManager(
         targetRemoteDir: String,
         defaultConflict: ConflictResolution = ConflictResolution.RENAME
     ): Result<Int> = withContext(Dispatchers.IO) {
+        if (!transferMutex.tryLock()) {
+            return@withContext Result.failure(IllegalStateException("Transfer lain sedang berjalan"))
+        }
+        try {
         runCatching {
             TransferCancellationSignal.reset()
+            _progressState.value = TransferProgress(
+                isTransferring = true,
+                isDownload = false,
+                currentFileName = "Menyiapkan unggahan",
+                fileIndex = 0,
+                totalFiles = uris.size,
+                recentTransfers = _progressState.value.recentTransfers
+            )
             var totalBytes = 0L
             val fileList = mutableListOf<Pair<Uri, Pair<String, Long>>>()
             val completedItems = mutableListOf<CompletedTransferItem>()
@@ -214,7 +306,7 @@ class TransferManager(
                 fileList.add(Pair(uri, nameAndSize))
             }
 
-            startService(fileList.firstOrNull()?.second?.first ?: "Upload", totalBytes)
+            var transferServiceStarted = false
             try {
                 var transferredBytesTotal = 0L
                 var completedCount = 0
@@ -223,28 +315,6 @@ class TransferManager(
                     if (TransferCancellationSignal.isCancelled()) break
                     val (uri, fileInfo) = item
                     val (origName, fileSize) = fileInfo
-
-                    var targetRemotePath = if (targetRemoteDir.isBlank()) origName else "$targetRemoteDir/$origName"
-
-                    var targetExistedBefore = smbManager.fileExists(targetRemotePath)
-                    if (targetExistedBefore) {
-                        when (defaultConflict) {
-                            ConflictResolution.SKIP -> continue
-                            ConflictResolution.OVERWRITE -> {  }
-                            ConflictResolution.RENAME -> {
-                                val dotIndex = origName.lastIndexOf('.')
-                                val baseName = if (dotIndex > 0) origName.substring(0, dotIndex) else origName
-                                val ext = if (dotIndex > 0) origName.substring(dotIndex) else ""
-                                var counter = 1
-                                while (smbManager.fileExists(targetRemotePath)) {
-                                    val newName = "$baseName ($counter)$ext"
-                                    targetRemotePath = if (targetRemoteDir.isBlank()) newName else "$targetRemoteDir/$newName"
-                                    counter++
-                                }
-                                targetExistedBefore = false
-                            }
-                        }
-                    }
 
                     _progressState.value = TransferProgress(
                         isTransferring = true,
@@ -257,12 +327,45 @@ class TransferManager(
                         recentTransfers = _progressState.value.recentTransfers
                     )
 
+                    var targetRemotePath = if (targetRemoteDir.isBlank()) origName else "$targetRemoteDir/$origName"
+
+                    val targetIsDirectory = smbManager.directoryExists(targetRemotePath)
+                    if (targetIsDirectory && defaultConflict == ConflictResolution.OVERWRITE) {
+                        throw IllegalArgumentException("Tidak dapat menimpa folder dengan berkas: $origName")
+                    }
+                    var targetExistedBefore = targetIsDirectory || smbManager.fileExists(targetRemotePath)
+                    if (targetExistedBefore) {
+                        when (defaultConflict) {
+                            ConflictResolution.SKIP -> continue
+                            ConflictResolution.OVERWRITE -> {  }
+                            ConflictResolution.RENAME -> {
+                                val dotIndex = origName.lastIndexOf('.')
+                                val baseName = if (dotIndex > 0) origName.substring(0, dotIndex) else origName
+                                val ext = if (dotIndex > 0) origName.substring(dotIndex) else ""
+                                var counter = 1
+                                while (smbManager.fileExists(targetRemotePath) || smbManager.directoryExists(targetRemotePath)) {
+                                    val newName = "$baseName ($counter)$ext"
+                                    targetRemotePath = if (targetRemoteDir.isBlank()) newName else "$targetRemoteDir/$newName"
+                                    counter++
+                                }
+                                targetExistedBefore = false
+                            }
+                        }
+                    }
+                    val uploadPath = if (targetExistedBefore && defaultConflict == ConflictResolution.OVERWRITE) {
+                        remoteSiblingPath(targetRemoteDir, ".itshare-part-${System.nanoTime()}")
+                    } else targetRemotePath
+
                     try {
                         val inStream = context.contentResolver.openInputStream(uri)
                             ?: throw IllegalStateException("Gagal membuka file input HP")
                         try {
 
-                            val outStream = smbManager.openWriteStream(targetRemotePath).getOrThrow()
+                            val outStream = smbManager.openWriteStream(uploadPath).getOrThrow()
+                            if (!transferServiceStarted) {
+                                startService(origName, totalBytes)
+                                transferServiceStarted = true
+                            }
                             copyStreamWithProgress(
                                 inStream,
                                 outStream,
@@ -279,11 +382,24 @@ class TransferManager(
                             runCatching { inStream.close() }
                         }
                         if (TransferCancellationSignal.isCancelled()) throw IllegalStateException("Transfer dibatalkan")
-                    } catch (error: Throwable) {
-                        Log.e("ItShareTransfer", "Upload failed for '$origName' ($targetRemotePath)", error)
-                        if (!targetExistedBefore) {
-                            runCatching { smbManager.deleteFile(targetRemotePath).getOrThrow() }
+                        if (uploadPath != targetRemotePath) {
+                            commitRemoteOverwrite(uploadPath, targetRemotePath)
                         }
+                    } catch (error: Exception) {
+                        Log.e("ItShareTransfer", "Upload failed for '$origName' ($targetRemotePath)", error)
+                        val cleanupPath = if (uploadPath != targetRemotePath || !targetExistedBefore) uploadPath else null
+                        cleanupPath?.let { path ->
+                            smbManager.deleteFile(path).onFailure { cleanupError ->
+                                Log.e("ItShareTransfer", "Could not remove partial upload '$path'", cleanupError)
+                            }
+                        }
+                        completedItems += CompletedTransferItem(
+                            fileName = origName,
+                            sizeBytes = fileSize,
+                            isDownload = false,
+                            isSuccess = false,
+                            locationPath = targetRemotePath
+                        )
                         throw error
                     }
 
@@ -292,7 +408,8 @@ class TransferManager(
                         fileName = origName,
                         sizeBytes = fileSize,
                         isDownload = false,
-                        isSuccess = true
+                        isSuccess = true,
+                        locationPath = targetRemotePath
                     )
                     completedItems += completedItem
                 }
@@ -300,12 +417,21 @@ class TransferManager(
                 completedCount
             } finally {
                 if (completedItems.isNotEmpty()) {
-                    val group = CompletedTransferGroup(isDownload = false, items = completedItems.toList())
-                    _progressState.value = _progressState.value.copy(recentTransfers = listOf(group) + _progressState.value.recentTransfers.take(19))
+                    val group = createTransferGroup(
+                        isDownload = false,
+                        items = completedItems.toList(),
+                        remoteFolderPath = targetRemoteDir
+                    )
+                    recordCompletedGroup(group)
                 }
-                stopService()
+                if (transferServiceStarted) stopService()
                 _progressState.value = _progressState.value.copy(isTransferring = false, speedBytesPerSec = 0L)
             }
+        }.onFailure {
+            _progressState.value = _progressState.value.copy(isTransferring = false, speedBytesPerSec = 0L)
+        }
+        } finally {
+            transferMutex.unlock()
         }
     }
 
@@ -333,7 +459,7 @@ class TransferManager(
     ) {
         val buffer = ByteArray(64 * 1024)
         var bytesRead: Int
-        var remainingBytes = expectedBytes
+        var copiedBytes = 0L
         var lastTime = System.currentTimeMillis()
         var bytesSinceLastTime = 0L
         var currentSpeed = 0L
@@ -341,20 +467,14 @@ class TransferManager(
         inStream.use { input ->
             outStream.use { output ->
                 while (true) {
-                    val remaining = remainingBytes
-                    if (remaining != null && remaining <= 0L) break
-                    val bytesToRead = remaining?.let { minOf(buffer.size.toLong(), it).toInt() } ?: buffer.size
-                    bytesRead = input.read(buffer, 0, bytesToRead)
+                    bytesRead = input.read(buffer)
                     if (bytesRead == -1) {
-                        if (remaining != null && remaining > 0L) {
-
-                            Log.w("ItShareTransfer", "Stream ended ${remaining}B before expected size — accepting as complete")
-                        }
                         break
                     }
+                    if (bytesRead == 0) continue
                     if (TransferCancellationSignal.isCancelled()) break
                     output.write(buffer, 0, bytesRead)
-                    remainingBytes = remainingBytes?.minus(bytesRead)
+                    copiedBytes += bytesRead
                     bytesSinceLastTime += bytesRead
 
                     val now = System.currentTimeMillis()
@@ -369,7 +489,59 @@ class TransferManager(
                 output.flush()
             }
         }
+        if (!TransferCancellationSignal.isCancelled() && expectedBytes != null && copiedBytes != expectedBytes) {
+            val difference = copiedBytes - expectedBytes
+            val message = if (difference < 0L) {
+                "Stream berakhir sebelum lengkap: diterima $copiedBytes dari $expectedBytes byte"
+            } else {
+                "Ukuran stream berubah: diterima $copiedBytes, seharusnya $expectedBytes byte"
+            }
+            throw java.io.EOFException(message)
+        }
+    }
 
+    private fun loadRecentTransfers(): List<CompletedTransferGroup> = synchronized(historyLock) {
+        val serialized = historyPreferences.getString(KEY_RECENT_TRANSFERS, null) ?: return@synchronized emptyList()
+        runCatching {
+            historyJson.decodeFromString(ListSerializer(CompletedTransferGroup.serializer()), serialized)
+                .take(MAX_RECENT_GROUPS)
+        }.onFailure { error ->
+            Log.w("ItShareTransfer", "Riwayat transfer lokal tidak dapat dibaca; mulai dengan riwayat kosong", error)
+        }.getOrDefault(emptyList())
+    }
+
+    private fun createTransferGroup(
+        isDownload: Boolean,
+        items: List<CompletedTransferItem>,
+        remoteFolderPath: String = "",
+        localFolderName: String = ""
+    ): CompletedTransferGroup {
+        val payload = smbManager.getActivePayload()
+        return CompletedTransferGroup(
+            isDownload = isDownload,
+            items = items,
+            shareName = payload?.share.orEmpty(),
+            serverAddress = payload?.let { "${it.host}:${it.port}" }.orEmpty(),
+            remoteFolderPath = remoteFolderPath,
+            localFolderName = localFolderName
+        )
+    }
+
+    private fun recordCompletedGroup(group: CompletedTransferGroup) = synchronized(historyLock) {
+        val updated = (listOf(group) + _progressState.value.recentTransfers).take(MAX_RECENT_GROUPS)
+        _progressState.value = _progressState.value.copy(recentTransfers = updated)
+        runCatching {
+            historyPreferences.edit(commit = true) {
+                putString(KEY_RECENT_TRANSFERS, historyJson.encodeToString(ListSerializer(CompletedTransferGroup.serializer()), updated))
+            }
+        }.onFailure { error ->
+            Log.e("ItShareTransfer", "Gagal menyimpan riwayat transfer", error)
+        }
+    }
+
+    private companion object {
+        const val KEY_RECENT_TRANSFERS = "recent_transfers_v1"
+        const val MAX_RECENT_GROUPS = 100
     }
 
     private fun findOrCreateDir(parent: DocumentFile, relativePath: String): DocumentFile {
@@ -386,29 +558,46 @@ class TransferManager(
         return current
     }
 
+    private suspend fun commitRemoteOverwrite(stagedPath: String, targetPath: String) {
+        val parentPath = targetPath.substringBeforeLast('/', "")
+        val backupPath = remoteSiblingPath(parentPath, ".itshare-backup-${System.nanoTime()}")
+        smbManager.renameFile(targetPath, backupPath).getOrThrow()
+        val installResult = smbManager.renameFile(stagedPath, targetPath)
+        if (installResult.isFailure) {
+            val restoreResult = smbManager.renameFile(backupPath, targetPath)
+            if (restoreResult.isFailure) {
+                Log.e("ItShareTransfer", "Could not restore original '$targetPath'; backup remains at '$backupPath'", restoreResult.exceptionOrNull())
+            }
+            throw installResult.exceptionOrNull() ?: IllegalStateException("Tidak dapat mengganti berkas tujuan: $targetPath")
+        }
+        smbManager.deleteFile(backupPath).onFailure { error ->
+            Log.w("ItShareTransfer", "Temporary overwrite backup remains at '$backupPath'", error)
+        }
+    }
+
+    private fun remoteSiblingPath(parentPath: String, name: String): String =
+        if (parentPath.isBlank()) name else "$parentPath/$name"
+
     private fun resolveLocalFileName(
         parentDir: DocumentFile,
         originalName: String,
         conflict: ConflictResolution
     ): String? {
-        val existing = parentDir.findFile(originalName)
-        if (existing == null) return originalName
-
-        return when (conflict) {
-            ConflictResolution.SKIP -> null
-            ConflictResolution.OVERWRITE -> {
-                existing.delete()
-                originalName
-            }
-            ConflictResolution.RENAME -> {
-                val dotIndex = originalName.lastIndexOf('.')
-                val baseName = if (dotIndex > 0) originalName.substring(0, dotIndex) else originalName
-                val ext = if (dotIndex > 0) originalName.substring(dotIndex) else ""
-                var counter = 1
-                while (parentDir.findFile("$baseName ($counter)$ext") != null) {
-                    counter++
+        return when (parentDir.findFile(originalName)) {
+            null -> originalName
+            else -> when (conflict) {
+                ConflictResolution.SKIP -> null
+                ConflictResolution.OVERWRITE -> originalName
+                ConflictResolution.RENAME -> {
+                    val dotIndex = originalName.lastIndexOf('.')
+                    val baseName = if (dotIndex > 0) originalName.substring(0, dotIndex) else originalName
+                    val ext = if (dotIndex > 0) originalName.substring(dotIndex) else ""
+                    var counter = 1
+                    while (parentDir.findFile("$baseName ($counter)$ext") != null) {
+                        counter++
+                    }
+                    "$baseName ($counter)$ext"
                 }
-                "$baseName ($counter)$ext"
             }
         }
     }
@@ -441,11 +630,7 @@ class TransferManager(
             putExtra(TransferForegroundService.EXTRA_FILE_NAME, fileName)
             putExtra(TransferForegroundService.EXTRA_TOTAL_BYTES, totalBytes)
         }
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
-        }
+        context.startForegroundService(intent)
     }
 
     private fun updateServiceProgress(fileName: String, totalBytes: Long, transferredBytes: Long, speedBytesPerSec: Long) {
@@ -459,11 +644,10 @@ class TransferManager(
             putExtra(TransferForegroundService.EXTRA_BYTES_TRANSFERRED, transferredBytes)
             putExtra(TransferForegroundService.EXTRA_SPEED_BYTES_PER_SEC, speedBytesPerSec)
         }
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
-        }
+        // The transfer already started this service as a foreground service.
+        // Progress updates must not create a fresh foreground-start deadline.
+        runCatching { context.startService(intent) }
+            .onFailure { Log.w("ItShareTransfer", "Could not update transfer notification", it) }
     }
 
     private fun stopService() {

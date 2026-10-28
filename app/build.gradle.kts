@@ -75,6 +75,7 @@ dependencies {
 
     // Security & Data
     implementation(libs.androidx.documentfile)
+    implementation(libs.androidx.exifinterface)
     implementation(libs.androidx.security.crypto)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
@@ -82,6 +83,5 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
     debugImplementation(libs.androidx.ui.tooling)
 }

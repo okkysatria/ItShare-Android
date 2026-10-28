@@ -3,12 +3,12 @@
 import android.graphics.Bitmap
 import android.media.MediaDataSource
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,49 +30,52 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import com.itshare.client.core.model.SmbFileItem
 import com.itshare.client.core.transfer.TransferProgress
-import com.itshare.client.ui.theme.ItShareGreen
-import com.itshare.client.ui.theme.ItShareAmber
-import com.itshare.client.ui.theme.ItShareAccent
+import com.itshare.client.ui.theme.itShareScreenGutter
 import com.itshare.client.ui.uiText
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserScreen(
-    language: String = "en",
     shareName: String,
     currentPath: String,
     files: List<SmbFileItem>,
     isReadOnly: Boolean,
     isLoading: Boolean,
-    exploreViewMode: String = "list",
-    onExploreViewModeChange: (String) -> Unit = {},
-    transferProgress: TransferProgress = TransferProgress(),
     onNavigateInto: (SmbFileItem) -> Unit,
     onNavigateToPath: (String) -> Unit,
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit,
     onDownloadFiles: (List<SmbFileItem>) -> Unit,
     onUploadClicked: () -> Unit,
+    onCancelTransfer: () -> Unit,
+    onDisconnectClicked: () -> Unit,
+    onBackAtRoot: () -> Unit,
+    modifier: Modifier = Modifier,
+    language: String = "en",
+    connectionKey: String = shareName,
+    exploreViewMode: String = "list",
+    onExploreViewModeChange: (String) -> Unit = {},
+    transferProgress: TransferProgress = TransferProgress(),
     onLoadThumbnail: suspend (SmbFileItem, Int) -> Bitmap? = { _, _ -> null },
     onLoadImage: suspend (SmbFileItem) -> Bitmap? = { null },
     onCreateMediaSource: suspend (SmbFileItem) -> MediaDataSource = { error("Media preview is unavailable") },
     onDeleteFile: (SmbFileItem) -> Unit = {},
-    onCreateFolder: (String) -> Unit = {},
-    onCancelTransfer: () -> Unit,
-    onDisconnectClicked: () -> Unit,
-    onBackAtRoot: () -> Unit,
-    modifier: Modifier = Modifier
+    onDeleteFiles: (List<SmbFileItem>) -> Unit = { items -> items.forEach(onDeleteFile) },
+    onCreateFolder: (String) -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("all") }
@@ -108,11 +111,10 @@ fun FileBrowserScreen(
     }
 
     fun matchesCategory(item: SmbFileItem): Boolean {
-        if (item.isDirectory || selectedCategory == "all") return true
         return when (selectedCategory) {
-            "images" -> item.isImageFile()
-            "video" -> item.isVideoFile()
-            "documents" -> item.name.substringAfterLast('.', "").lowercase() in setOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "zip", "7z", "rar")
+            "images" -> !item.isDirectory && item.isImageFile()
+            "video" -> !item.isDirectory && item.isVideoFile()
+            "documents" -> !item.isDirectory && item.name.substringAfterLast('.', "").lowercase() in setOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "zip", "7z", "rar")
             else -> true
         }
     }
@@ -143,110 +145,90 @@ fun FileBrowserScreen(
         )
     }
 
-    val totalFolderCount = remember(filteredFiles) { filteredFiles.count { it.isDirectory } }
-    val totalFileCount = remember(filteredFiles) { filteredFiles.count { !it.isDirectory } }
-    val totalSizeBytes = remember(filteredFiles) { filteredFiles.filter { !it.isDirectory }.sumOf { it.sizeBytes } }
-
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             Surface(
                 color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 2.dp
+                tonalElevation = 0.dp
             ) {
                 Column {
-                    TopAppBar(
-                        title = {
-                            if (selectedFiles.isNotEmpty()) {
-                                Text(
-                                    uiText(language, "${selectedFiles.size} selected", "${selectedFiles.size} dipilih"),
-                                    maxLines = 1,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            } else {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    shape = CircleShape,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        Spacer(Modifier.width(10.dp))
-                                        Box(Modifier.weight(1f)) {
-                                            if (searchQuery.isEmpty()) Text(
-                                                uiText(language, "Search in $shareName", "Cari di $shareName"),
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                            BasicTextField(
-                                                value = searchQuery,
-                                                onValueChange = { searchQuery = it },
-                                                singleLine = true,
-                                                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        }
-                                        if (searchQuery.isNotEmpty()) {
-                                            IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(28.dp)) {
-                                                Icon(Icons.Default.Close, contentDescription = uiText(language, "Clear search", "Hapus pencarian"), modifier = Modifier.size(18.dp))
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        navigationIcon = {
-                            IconButton(onClick = {
-                                if (selectedFiles.isNotEmpty()) selectedFiles = emptySet()
-                                else if (currentPath.isNotBlank()) onNavigateUp() else onBackAtRoot()
-                            }) {
-                                Icon(
-                                    if (selectedFiles.isNotEmpty()) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = if (selectedFiles.isNotEmpty()) uiText(language, "Clear selection", "Batalkan pilihan") else uiText(language, "Back", "Kembali")
-                                )
-                            }
-                        },
-                        actions = {
-                            if (selectedFiles.isNotEmpty()) {
-                                TextButton(onClick = {
-                                    selectedFiles = if (selectedFiles.size == filteredFiles.size) emptySet() else filteredFiles.toSet()
-                                }) {
-                                    Text(uiText(language, "Select all", "Pilih semua"), maxLines = 1)
-                                }
-                            } else {
-                                Box {
-                                    IconButton(onClick = { showOptionsMenu = true }) {
-                                        Icon(Icons.Default.MoreVert, contentDescription = uiText(language, "More options", "Opsi lainnya"))
-                                    }
-                                    DropdownMenu(expanded = showOptionsMenu, onDismissRequest = { showOptionsMenu = false }) {
-                                        DropdownMenuItem(
-                                            text = { Text(uiText(language, "Refresh", "Muat ulang")) },
-                                            leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
-                                            onClick = { showOptionsMenu = false; onRefresh() }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(uiText(language, "New folder", "Folder baru")) },
-                                            leadingIcon = { Icon(Icons.Default.CreateNewFolder, contentDescription = null) },
-                                            enabled = !isReadOnly,
-                                            onClick = { showOptionsMenu = false; showCreateFolderDialog = true }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(uiText(language, "Disconnect", "Putuskan koneksi"), color = MaterialTheme.colorScheme.error) },
-                                            leadingIcon = { Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                                            onClick = { showOptionsMenu = false; showDisconnectConfirm = true }
-                                        )
-                                    }
-                                }
-                            }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
-                    )
-
                     if (selectedFiles.isEmpty()) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(64.dp)
+                                .padding(horizontal = itShareScreenGutter()),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { if (currentPath.isNotBlank()) onNavigateUp() else onBackAtRoot() },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = uiText(language, "Back", "Kembali"))
+                            }
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = CircleShape,
+                                modifier = Modifier.weight(1f).height(48.dp)
+                            ) {
+                                Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
+                                    Spacer(Modifier.width(12.dp))
+                                    Box(Modifier.weight(1f)) {
+                                        if (searchQuery.isEmpty()) Text(
+                                            uiText(language, "Search in ${currentPath.substringAfterLast('/').ifBlank { shareName }}", "Cari di ${currentPath.substringAfterLast('/').ifBlank { shareName }}"),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        BasicTextField(
+                                            value = searchQuery,
+                                            onValueChange = { searchQuery = it },
+                                            singleLine = true,
+                                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(48.dp)) {
+                                            Icon(Icons.Default.Close, contentDescription = uiText(language, "Clear search", "Hapus pencarian"), modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                            Box {
+                                IconButton(onClick = { showOptionsMenu = true }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = uiText(language, "More options", "Opsi lainnya"))
+                                }
+                                DropdownMenu(expanded = showOptionsMenu, onDismissRequest = { showOptionsMenu = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text(uiText(language, "Refresh", "Muat ulang")) },
+                                        leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                                        onClick = { showOptionsMenu = false; onRefresh() }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(uiText(language, "New folder", "Folder baru")) },
+                                        leadingIcon = { Icon(Icons.Default.CreateNewFolder, contentDescription = null) },
+                                        enabled = !isReadOnly && !transferProgress.isTransferring,
+                                        onClick = { showOptionsMenu = false; showCreateFolderDialog = true }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(uiText(language, "Disconnect", "Putuskan koneksi"), color = MaterialTheme.colorScheme.error) },
+                                        leadingIcon = { Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                                        enabled = !transferProgress.isTransferring,
+                                        onClick = { showOptionsMenu = false; showDisconnectConfirm = true }
+                                    )
+                                }
+                            }
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = itShareScreenGutter(), vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             listOf(
                                 "all" to uiText(language, "All", "Semua"),
@@ -254,49 +236,81 @@ fun FileBrowserScreen(
                                 "documents" to uiText(language, "Documents", "Dokumen"),
                                 "video" to uiText(language, "Video", "Video")
                             ).forEach { (key, label) ->
-                                FilterChip(
-                                    selected = selectedCategory == key,
+                                val selected = selectedCategory == key
+                                Surface(
                                     onClick = { selectedCategory = key },
-                                    label = { Text(label) },
-                                    shape = CircleShape
-                                )
+                                    shape = CircleShape,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                                    border = if (selected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                                ) {
+                                    Text(
+                                        label,
+                                        color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                        fontWeight = FontWeight.Medium,
+                                        style = MaterialTheme.typography.labelLarge,
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                                    )
+                                }
                             }
                         }
 
+                    } else {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 2.dp, bottom = 4.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).background(MaterialTheme.colorScheme.secondaryContainer).padding(horizontal = itShareScreenGutter(), vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            ItShareBreadcrumbBar(
-                                shareName = shareName,
-                                currentPath = currentPath,
-                                onCrumbClicked = onNavigateToPath,
+                            IconButton(onClick = { selectedFiles = emptySet() }) {
+                                Icon(Icons.Default.Close, contentDescription = uiText(language, "Clear selection", "Batalkan pilihan"), modifier = Modifier.size(24.dp))
+                            }
+                            Text(
+                                uiText(language, "${selectedFiles.size} selected", "${selectedFiles.size} dipilih"),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
                                 modifier = Modifier.weight(1f)
                             )
-                            Box {
-                                TextButton(onClick = { showSortMenu = true }, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                                    Text(uiText(language, sortBy.replaceFirstChar { it.uppercase() }, when (sortBy) { "size" -> "Ukuran"; "date" -> "Tanggal"; else -> "Nama" }), maxLines = 1)
-                                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-                                }
-                                DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
-                                    listOf("name" to uiText(language, "Name", "Nama"), "date" to uiText(language, "Date", "Tanggal"), "size" to uiText(language, "Size", "Ukuran")).forEach { (key, label) ->
-                                        DropdownMenuItem(text = { Text(label) }, onClick = { sortBy = key; showSortMenu = false })
-                                    }
-                                }
-                            }
-                            IconButton(onClick = {
-                                val nextGrid = !isGridView
-                                isGridView = nextGrid
-                                onExploreViewModeChange(if (nextGrid) "grid" else "list")
+                            TextButton(onClick = {
+                                selectedFiles = if (selectedFiles.size == filteredFiles.size) emptySet() else filteredFiles.toSet()
                             }) {
-                                Icon(
-                                if (isGridView) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
-                                    contentDescription = if (isGridView) uiText(language, "List view", "Tampilan daftar") else uiText(language, "Grid view", "Tampilan kisi"),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
+                                Text(uiText(language, "Select all", "Pilih semua"), maxLines = 1, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                             }
                         }
-                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .padding(horizontal = itShareScreenGutter(), vertical = if (selectedFiles.isEmpty()) 4.dp else 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        ItShareBreadcrumbBar(
+                            shareName = shareName,
+                            currentPath = currentPath,
+                            onCrumbClicked = onNavigateToPath,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Box {
+                            TextButton(onClick = { showSortMenu = true }, contentPadding = PaddingValues(horizontal = 4.dp)) {
+                                Text(when (sortBy) { "size" -> uiText(language, "Size", "Ukuran"); "date" -> uiText(language, "Date", "Tanggal"); else -> uiText(language, "Name", "Nama") }, maxLines = 1, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            }
+                            DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
+                                listOf("name" to uiText(language, "Name", "Nama"), "date" to uiText(language, "Date", "Tanggal"), "size" to uiText(language, "Size", "Ukuran")).forEach { (key, label) ->
+                                    DropdownMenuItem(text = { Text(label) }, onClick = { sortBy = key; showSortMenu = false })
+                                }
+                            }
+                        }
+                        IconButton(onClick = {
+                            val nextGrid = !isGridView
+                            isGridView = nextGrid
+                            onExploreViewModeChange(if (nextGrid) "grid" else "list")
+                        }) {
+                            Icon(
+                                if (isGridView) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
+                                contentDescription = if (isGridView) uiText(language, "List view", "Tampilan daftar") else uiText(language, "Grid view", "Tampilan kisi"),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 }
             }
@@ -313,34 +327,37 @@ fun FileBrowserScreen(
                 }
 
                 if (selectedFiles.isNotEmpty()) {
-                    Surface(tonalElevation = 8.dp, color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 18.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            SelectionAction(
-                                icon = Icons.Default.Download,
-                                label = uiText(language, "Download", "Unduh"),
-                                enabled = !transferProgress.isTransferring && selectedFiles.isNotEmpty(),
-                                onClick = { onDownloadFiles(selectedFiles.toList()); selectedFiles = emptySet() },
-                                modifier = Modifier.weight(1f)
-                            )
-                            SelectionAction(
-                                icon = Icons.Default.Info,
-                                label = uiText(language, "Details", "Properti"),
-                                enabled = selectedFiles.size == 1,
-                                onClick = { fileDetailItem = selectedFiles.singleOrNull() },
-                                modifier = Modifier.weight(1f)
-                            )
-                            SelectionAction(
-                                icon = Icons.Default.Delete,
-                                label = uiText(language, "Delete", "Hapus"),
-                                enabled = !isReadOnly,
-                                tint = MaterialTheme.colorScheme.error,
-                                onClick = { showBulkDeleteDialog = true },
-                                modifier = Modifier.weight(1f)
-                            )
+                    Surface(tonalElevation = 0.dp, color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
+                        Column {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f))
+                            Row(
+                                modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 18.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                SelectionAction(
+                                    icon = Icons.Default.Info,
+                                    label = uiText(language, "Details", "Properti"),
+                                    enabled = selectedFiles.size == 1,
+                                    onClick = { fileDetailItem = selectedFiles.singleOrNull() },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                SelectionAction(
+                                    icon = Icons.Default.Delete,
+                                    label = uiText(language, "Delete", "Hapus"),
+                                    enabled = !isReadOnly,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    onClick = { showBulkDeleteDialog = true },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                SelectionAction(
+                                    icon = Icons.Default.Download,
+                                    label = uiText(language, "Download", "Unduh"),
+                                    enabled = !transferProgress.isTransferring && selectedFiles.isNotEmpty(),
+                                    onClick = { onDownloadFiles(selectedFiles.toList()); selectedFiles = emptySet() },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                         }
                     }
                 }
@@ -383,7 +400,13 @@ fun FileBrowserScreen(
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = if (searchQuery.isNotBlank()) uiText(language, "No files match \"$searchQuery\"", "Tidak ada berkas yang cocok dengan \"$searchQuery\"") else uiText(language, "This folder is empty", "Folder ini kosong"),
+                        text = when {
+                            searchQuery.isNotBlank() -> uiText(language, "No files match \"$searchQuery\"", "Tidak ada berkas yang cocok dengan \"$searchQuery\"")
+                            selectedCategory == "images" -> uiText(language, "No images in this folder", "Tidak ada gambar di folder ini")
+                            selectedCategory == "video" -> uiText(language, "No videos in this folder", "Tidak ada video di folder ini")
+                            selectedCategory == "documents" -> uiText(language, "No documents in this folder", "Tidak ada dokumen di folder ini")
+                            else -> uiText(language, "This folder is empty", "Folder ini kosong")
+                        },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -397,7 +420,7 @@ fun FileBrowserScreen(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
                         ) {
                             Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Lock, contentDescription = null, tint = ItShareAmber, modifier = Modifier.size(21.dp))
+                                Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(21.dp))
                                 Spacer(Modifier.width(10.dp))
                                 Column {
                                     Text(uiText(language, "Read-only access", "Akses hanya baca"), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
@@ -406,42 +429,51 @@ fun FileBrowserScreen(
                         }
                     }
                     if (isGridView) {
+                        val containerWidth = LocalWindowInfo.current.containerSize.width
+                        val screenWidth = with(LocalDensity.current) { containerWidth.toDp().value.toInt() }
+                        val gridGutter = itShareScreenGutter()
+                        val gridColumns = ((screenWidth - gridGutter.value.toInt() * 2 + 10) / 118).coerceIn(2, 5)
                         LazyVerticalGrid(
-                            columns = GridCells.Adaptive(minSize = 112.dp),
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 100.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            columns = GridCells.Fixed(gridColumns),
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .widthIn(max = 900.dp)
+                                .fillMaxWidth()
+                                .align(Alignment.CenterHorizontally),
+                            contentPadding = PaddingValues(start = gridGutter, end = gridGutter, top = 10.dp, bottom = 100.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            gridItems(filteredFiles, key = { "$shareName:${it.path}" }) { item ->
+                            gridItems(filteredFiles, key = { "$connectionKey:${it.path}:${it.sizeBytes}:${it.lastModifiedEpoch}" }) { item ->
                                 FileGridCard(
                                     item = item,
                                     selected = item in selectedFiles,
                                     selectionMode = selectedFiles.isNotEmpty(),
                                     language = language,
-                                    isReadOnly = isReadOnly,
                                     onLoadThumbnail = onLoadThumbnail,
                                     allowThumbnailLoading = !transferProgress.isTransferring,
                                     onClick = { handleItemClick(item) },
                                     onLongClick = { selectedFiles = selectedFiles + item },
-                                    onMenuClick = { fileDetailItem = item },
-                                    onDownloadClick = { onDownloadFiles(listOf(item)) },
-                                    onDeleteClick = { fileToDelete = item }
                                 )
                             }
                         }
                     } else {
                         LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .widthIn(max = 900.dp)
+                                .fillMaxWidth()
+                                .align(Alignment.CenterHorizontally),
                             contentPadding = PaddingValues(bottom = 100.dp)
                         ) {
-                            items(filteredFiles, key = { "$shareName:${it.path}" }) { item ->
+                            items(filteredFiles, key = { "$connectionKey:${it.path}:${it.sizeBytes}:${it.lastModifiedEpoch}" }) { item ->
                                 val isSelected = item in selectedFiles
                                 ItShareFileListItem(
                                     item = item,
                                     isSelected = isSelected,
                                     selectionMode = selectedFiles.isNotEmpty(),
                                     isReadOnly = isReadOnly,
+                                    transferInProgress = transferProgress.isTransferring,
                                     onItemClick = { handleItemClick(item) },
                                     onLongClick = { selectedFiles = selectedFiles + item },
                                     language = language,
@@ -450,7 +482,6 @@ fun FileBrowserScreen(
                                     onInfoClick = { fileDetailItem = item },
                                     onDownloadClick = { onDownloadFiles(listOf(item)) },
                                     onDeleteClick = { fileToDelete = item },
-                                    onCheckboxToggle = { selectedFiles = if (isSelected) selectedFiles - item else selectedFiles + item }
                                 )
                                 HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(start = 76.dp))
                             }
@@ -458,14 +489,15 @@ fun FileBrowserScreen(
                     }
                 }
             }
-            if (!isLoading && selectedFiles.isEmpty() && !isReadOnly) {
+            if (!isLoading && selectedFiles.isEmpty() && !isReadOnly && !transferProgress.isTransferring) {
                 ExtendedFloatingActionButton(
                     onClick = onUploadClicked,
                     icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    text = { Text(uiText(language, "Upload", "Unggah")) },
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 20.dp),
+                    text = { Text(uiText(language, "Upload", "Unggah"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = itShareScreenGutter(), bottom = 20.dp),
                     containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    shape = RoundedCornerShape(20.dp)
                 )
             }
         }
@@ -480,7 +512,7 @@ fun FileBrowserScreen(
     }
 
     mediaPreviewItem?.let { item ->
-        key(shareName, item.path) {
+        key(connectionKey, item.path, item.sizeBytes, item.lastModifiedEpoch) {
             MediaPreviewDialog(
                 item = item,
                 language = language,
@@ -515,7 +547,7 @@ fun FileBrowserScreen(
                     val deleting = selectedFiles.toList()
                     selectedFiles = emptySet()
                     showBulkDeleteDialog = false
-                    deleting.forEach(onDeleteFile)
+                    onDeleteFiles(deleting)
                 }) { Text(uiText(language, "Delete", "Hapus"), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { showBulkDeleteDialog = false }) { Text(uiText(language, "Cancel", "Batal")) } }
@@ -536,9 +568,8 @@ fun FileBrowserScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        val item = target
                         fileToDelete = null
-                        onDeleteFile(item)
+                        onDeleteFile(target)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
@@ -615,30 +646,13 @@ fun ItShareBreadcrumbBar(
         modifier = modifier.horizontalScroll(scrollState),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Surface(
-            onClick = { onCrumbClicked("") },
-            shape = RoundedCornerShape(8.dp),
-            color = if (currentPath.isBlank()) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.padding(end = 4.dp)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.Home,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = if (currentPath.isBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = shareName,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-        }
+        Text(
+            text = shareName,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.clickable { onCrumbClicked("") }.padding(end = 3.dp)
+        )
 
         var accumulatedPath = ""
         for ((index, part) in parts.withIndex()) {
@@ -646,27 +660,15 @@ fun ItShareBreadcrumbBar(
             val targetPath = accumulatedPath
             val isLast = index == parts.size - 1
 
-            Icon(
-                Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                modifier = Modifier.size(16.dp)
+            Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = part,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (isLast) FontWeight.Bold else FontWeight.Medium,
+                color = if (isLast) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.clickable { onCrumbClicked(targetPath) }.padding(horizontal = 2.dp)
             )
-
-            Surface(
-                onClick = { onCrumbClicked(targetPath) },
-                shape = RoundedCornerShape(8.dp),
-                color = if (isLast) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp)
-            ) {
-                Text(
-                    text = part,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (isLast) FontWeight.Bold else FontWeight.Medium,
-                    color = if (isLast) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                )
-            }
         }
     }
 }
@@ -675,27 +677,20 @@ fun ItShareBreadcrumbBar(
 fun ItShareFileListItem(
     item: SmbFileItem,
     isSelected: Boolean,
+    onItemClick: () -> Unit,
+    onInfoClick: () -> Unit,
+    modifier: Modifier = Modifier,
     selectionMode: Boolean = false,
     isReadOnly: Boolean = false,
-    onItemClick: () -> Unit,
+    transferInProgress: Boolean = false,
     onLongClick: () -> Unit = {},
-    onInfoClick: () -> Unit,
     onDownloadClick: () -> Unit = {},
     onDeleteClick: () -> Unit = {},
-    onCheckboxToggle: () -> Unit,
     language: String = "en",
     onLoadThumbnail: suspend (SmbFileItem, Int) -> Bitmap? = { _, _ -> null },
-    allowThumbnailLoading: Boolean = true,
-    modifier: Modifier = Modifier
+    allowThumbnailLoading: Boolean = true
 ) {
     var showMenu by remember { mutableStateOf(false) }
-    val thumbnail by produceState<Bitmap?>(null, item.path, item.sizeBytes, item.lastModifiedEpoch) {
-        if (allowThumbnailLoading && (item.isImageFile() || item.isVideoFile())) {
-            val loaded = runCatching { onLoadThumbnail(item, 256) }.getOrNull()
-            if (loaded != null) value = loaded
-        }
-    }
-
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -704,47 +699,24 @@ fun ItShareFileListItem(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (selectionMode) {
-            if (isSelected) {
-                Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(52.dp)) {
-                    Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary) }
-                }
-            } else {
-                Surface(shape = RoundedCornerShape(12.dp), color = getItemContainerColor(item), modifier = Modifier.size(52.dp)) {
-                    Box(contentAlignment = Alignment.Center) { Icon(getFileIcon(item), contentDescription = null, tint = getItemIconColor(item), modifier = Modifier.size(24.dp)) }
-                }
-            }
-        } else {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = getItemContainerColor(item),
-                modifier = Modifier.size(52.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    val thumbnailBitmap = thumbnail
-                    if (thumbnailBitmap != null) {
-                        androidx.compose.foundation.Image(
-                            bitmap = thumbnailBitmap.asImageBitmap(),
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                        )
-                        if (item.isVideoFile()) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(24.dp).background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f), CircleShape))
-                        }
-                    } else {
-                        Icon(imageVector = getFileIcon(item), contentDescription = null, tint = getItemIconColor(item), modifier = Modifier.size(24.dp))
-                    }
-                }
-            }
-        }
+        FileMediaThumbnail(
+            item = item,
+            selected = isSelected,
+            selectionMode = selectionMode,
+            allowThumbnailLoading = allowThumbnailLoading,
+            onLoadThumbnail = onLoadThumbnail,
+            maxThumbnailSize = 256,
+            language = language,
+            isGrid = false,
+            modifier = Modifier.size(48.dp)
+        )
 
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(12.dp))
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = item.name,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -755,17 +727,19 @@ fun ItShareFileListItem(
             val subtitle = if (item.isDirectory) {
                 "Folder"
             } else {
-                "${formatFileSize(item.sizeBytes)} • ${formatDate(item.lastModifiedEpoch)}"
+                "${formatFileSize(item.sizeBytes)} · ${formatShortDate(item.lastModifiedEpoch)}"
             }
 
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
 
-        if (!selectionMode) Box {
+        Box {
             IconButton(onClick = { showMenu = true }) {
                 Icon(Icons.Default.MoreVert, contentDescription = uiText(language, "Options", "Opsi"), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
             }
@@ -777,6 +751,7 @@ fun ItShareFileListItem(
                 DropdownMenuItem(
                     text = { Text(uiText(language, "Download", "Unduh")) },
                     leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
+                    enabled = !transferInProgress,
                     onClick = {
                         showMenu = false
                         onDownloadClick()
@@ -807,108 +782,116 @@ fun ItShareFileListItem(
 }
 
 @Composable
-private fun FileGridCard(
+private fun FileMediaThumbnail(
     item: SmbFileItem,
     selected: Boolean,
     selectionMode: Boolean,
-    language: String,
-    isReadOnly: Boolean,
-    onLoadThumbnail: suspend (SmbFileItem, Int) -> Bitmap?,
     allowThumbnailLoading: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    onMenuClick: () -> Unit,
-    onDownloadClick: () -> Unit = {},
-    onDeleteClick: () -> Unit
+    onLoadThumbnail: suspend (SmbFileItem, Int) -> Bitmap?,
+    maxThumbnailSize: Int,
+    language: String,
+    isGrid: Boolean,
+    modifier: Modifier = Modifier
 ) {
-    var showMenu by remember { mutableStateOf(false) }
-    val thumbnail by produceState<Bitmap?>(null, item.path, item.sizeBytes, item.lastModifiedEpoch) {
-        if (allowThumbnailLoading && (item.isImageFile() || item.isVideoFile())) {
-            val loaded = runCatching { onLoadThumbnail(item, 320) }.getOrNull()
-            if (loaded != null) value = loaded
-        }
+    var thumbnail by remember(item.path, item.sizeBytes, item.lastModifiedEpoch) {
+        mutableStateOf<Bitmap?>(null)
     }
-    Column {
-        Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = if (selected) MaterialTheme.colorScheme.secondaryContainer else getItemContainerColor(item),
-            modifier = Modifier.fillMaxWidth().aspectRatio(1f).combinedClickable(onClick = onClick, onLongClick = onLongClick)
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                val bitmap = thumbnail
-                if (bitmap != null) {
-                    androidx.compose.foundation.Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = item.name,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                    )
-                    if (item.isVideoFile()) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .padding(8.dp)
-                                .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.6f), CircleShape)
-                                .padding(4.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                tint = androidx.compose.ui.graphics.Color.White,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                } else if (selectionMode && selected) {
-                    Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(44.dp))
-                } else {
-                    if (item.isDirectory) {
-                        Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(52.dp))
-                    } else {
-                        val ext = item.name.substringAfterLast('.', "").uppercase().take(4)
-                        Text(ext.ifBlank { "FILE" }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = getItemIconColor(item))
-                    }
-                    if (item.isVideoFile()) Icon(Icons.Default.PlayCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp))
-                }
-                if (selectionMode && selected) {
-                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(26.dp)) {
-                        Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp)) }
-                    }
-                }
-            }
+    LaunchedEffect(item.path, item.sizeBytes, item.lastModifiedEpoch, allowThumbnailLoading) {
+        if (!allowThumbnailLoading || (!item.isImageFile() && !item.isVideoFile())) return@LaunchedEffect
+        val loaded = try {
+            onLoadThumbnail(item, maxThumbnailSize)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
         }
-        Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
-            Column(modifier = Modifier.weight(1f).clickable(onClick = onClick)) {
-                Text(item.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (item.isDirectory) uiText(language, "Folder", "Folder") else formatFileSize(item.sizeBytes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        if (loaded != null) thumbnail = loaded
+    }
+
+    Surface(
+        shape = RoundedCornerShape(if (isGrid) 16.dp else 12.dp),
+        color = if (selectionMode && selected) MaterialTheme.colorScheme.primary else getItemContainerColor(item),
+        modifier = modifier
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            when {
+                selectionMode && selected -> Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(if (isGrid) 44.dp else 24.dp)
+                )
+                thumbnail != null -> Image(
+                    bitmap = thumbnail!!.asImageBitmap(),
+                    contentDescription = item.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                item.isDirectory -> Icon(
+                    Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = getItemIconColor(item),
+                    modifier = Modifier.size(if (isGrid) 40.dp else 28.dp)
+                )
+                else -> FileItemGlyph(item, Modifier.size(if (isGrid) 56.dp else 24.dp))
             }
-            if (!selectionMode) Box {
-                IconButton(onClick = { showMenu = true }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.MoreVert, contentDescription = uiText(language, "Options", "Opsi"), modifier = Modifier.size(18.dp)) }
-                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                    DropdownMenuItem(
-                        text = { Text(uiText(language, "Download", "Unduh")) },
-                        leadingIcon = { Icon(Icons.Default.Download, null) },
-                        onClick = {
-                            showMenu = false
-                            onDownloadClick()
-                        }
-                    )
-                    DropdownMenuItem(text = { Text(uiText(language, "Details", "Properti")) }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { showMenu = false; onMenuClick() })
-                    if (!isReadOnly) {
-                        DropdownMenuItem(
-                            text = { Text(uiText(language, "Delete", "Hapus"), color = MaterialTheme.colorScheme.error) },
-                            leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
-                            onClick = { showMenu = false; onDeleteClick() }
-                        )
-                    }
-                }
+
+            if (item.isVideoFile() && !(selectionMode && selected)) {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    contentDescription = uiText(language, "Play video", "Putar video"),
+                    tint = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(if (isGrid) 8.dp else 4.dp)
+                        .size(if (isGrid) 24.dp else 18.dp)
+                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                        .padding(if (isGrid) 4.dp else 2.dp)
+                )
             }
         }
     }
 }
 
 @Composable
-private fun SelectionAction(icon: ImageVector, label: String, enabled: Boolean, tint: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun FileGridCard(
+    item: SmbFileItem,
+    selected: Boolean,
+    selectionMode: Boolean,
+    language: String,
+    onLoadThumbnail: suspend (SmbFileItem, Int) -> Bitmap?,
+    allowThumbnailLoading: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    Column(modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
+        FileMediaThumbnail(
+            item = item,
+            selected = selected,
+            selectionMode = selectionMode,
+            allowThumbnailLoading = allowThumbnailLoading,
+            onLoadThumbnail = onLoadThumbnail,
+            maxThumbnailSize = 320,
+            language = language,
+            isGrid = true,
+            modifier = Modifier.fillMaxWidth().aspectRatio(1f)
+        )
+        Column(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                Text(item.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (item.isDirectory) uiText(language, "Folder", "Folder") else formatFileSize(item.sizeBytes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun SelectionAction(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurface
+) {
     TextButton(onClick = onClick, enabled = enabled, modifier = modifier) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(icon, contentDescription = null, tint = if (enabled) tint else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
@@ -921,8 +904,8 @@ private fun SelectionAction(icon: ImageVector, label: String, enabled: Boolean, 
 fun ItShareTransferMiniDock(
     progress: TransferProgress,
     onCancel: () -> Unit,
-    language: String = "en",
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    language: String = "en"
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -945,11 +928,17 @@ fun ItShareTransferMiniDock(
                         modifier = Modifier
                             .size(8.dp)
                             .clip(CircleShape)
-                            .background(ItShareGreen)
+                            .background(MaterialTheme.colorScheme.primary)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (progress.isDownload) uiText(language, "Downloading", "Mengunduh") + " (${progress.fileIndex}/${progress.totalFiles})" else uiText(language, "Uploading", "Mengunggah") + " (${progress.fileIndex}/${progress.totalFiles})",
+                        text = if (progress.fileIndex == 0) {
+                            if (progress.isDownload) uiText(language, "Preparing download", "Menyiapkan unduhan")
+                            else uiText(language, "Preparing upload", "Menyiapkan unggahan")
+                        } else {
+                            val direction = if (progress.isDownload) uiText(language, "Downloading", "Mengunduh") else uiText(language, "Uploading", "Mengunggah")
+                            "$direction (${progress.fileIndex}/${progress.totalFiles})"
+                        },
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -973,13 +962,22 @@ fun ItShareTransferMiniDock(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            LinearProgressIndicator(
-                progress = { progress.progressPercent / 100f },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp))
-            )
+            if (progress.totalBytes > 0L) {
+                LinearProgressIndicator(
+                    progress = { progress.progressPercent / 100f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                )
+            } else {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                )
+            }
 
             Spacer(modifier = Modifier.height(6.dp))
 
@@ -988,7 +986,11 @@ fun ItShareTransferMiniDock(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "${progress.progressPercent}% • ${formatFileSize(progress.bytesTransferred)} / ${formatFileSize(progress.totalBytes)}",
+                    text = if (progress.totalBytes > 0L) {
+                        "${progress.progressPercent}% • ${formatFileSize(progress.bytesTransferred)} / ${formatFileSize(progress.totalBytes)}"
+                    } else {
+                        "${formatFileSize(progress.bytesTransferred)} " + uiText(language, "transferred", "terkirim")
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1045,20 +1047,68 @@ private fun DetailRow(label: String, value: String) {
 }
 
 @Composable
-private fun getItemContainerColor(item: SmbFileItem): Color {
-    return if (item.isDirectory) {
-        MaterialTheme.colorScheme.primaryContainer
+private fun FileItemGlyph(item: SmbFileItem, modifier: Modifier = Modifier) {
+    val extension = item.name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+    if (!item.isDirectory && extension in setOf("pdf", "mp4", "mkv", "mov", "zip", "rar", "7z", "txt")) {
+        Text(
+            text = when (extension) {
+                "mkv", "mov" -> "VIDEO"
+                "rar", "7z" -> "ZIP"
+                else -> extension.uppercase(Locale.ROOT)
+            },
+            modifier = modifier,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = getItemIconColor(item),
+            maxLines = 1
+        )
     } else {
-        MaterialTheme.colorScheme.surfaceVariant
+        Icon(
+            imageVector = getFileIcon(item),
+            contentDescription = null,
+            tint = getItemIconColor(item),
+            modifier = modifier
+        )
+    }
+}
+
+@Composable
+private fun getItemContainerColor(item: SmbFileItem): Color {
+    val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    if (item.isDirectory || item.isImageFile()) return if (darkTheme) Color(0xFF214735) else Color(0xFFE3EFEC)
+    if (darkTheme) return when (item.name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+        "pdf" -> Color(0xFF492624)
+        "mp4", "mkv", "mov", "avi" -> Color(0xFF392B4B)
+        "zip", "rar", "7z", "tar" -> Color(0xFF493B22)
+        "txt", "doc", "docx", "xls", "xlsx", "ppt", "pptx" -> Color(0xFF263A56)
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    return when (item.name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+        "pdf" -> Color(0xFFFCE7E5)
+        "mp4", "mkv", "mov", "avi" -> Color(0xFFECE0F7)
+        "zip", "rar", "7z", "tar" -> Color(0xFFFFEDC7)
+        "txt", "doc", "docx", "xls", "xlsx", "ppt", "pptx" -> Color(0xFFDCE9FC)
+        else -> MaterialTheme.colorScheme.surfaceVariant
     }
 }
 
 @Composable
 private fun getItemIconColor(item: SmbFileItem): Color {
-    return if (item.isDirectory) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
+    val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    if (item.isDirectory || item.isImageFile()) return if (darkTheme) Color(0xFFB2E6D2) else Color(0xFF0F5D52)
+    if (darkTheme) return when (item.name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+        "pdf" -> Color(0xFFFFB4AB)
+        "mp4", "mkv", "mov", "avi" -> Color(0xFFD0BCFF)
+        "zip", "rar", "7z", "tar" -> Color(0xFFFFDFA6)
+        "txt", "doc", "docx", "xls", "xlsx", "ppt", "pptx" -> Color(0xFFB5C9FF)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    return when (item.name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+        "pdf" -> Color(0xFFB3261E)
+        "mp4", "mkv", "mov", "avi" -> Color(0xFF6034A4)
+        "zip", "rar", "7z", "tar" -> Color(0xFF805300)
+        "txt", "doc", "docx", "xls", "xlsx", "ppt", "pptx" -> Color(0xFF245AA6)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 }
 
@@ -1100,5 +1150,11 @@ private fun formatSpeed(bytesPerSec: Long): String {
 private fun formatDate(epochSeconds: Long): String {
     if (epochSeconds <= 0) return "-"
     val sdf = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
+    return sdf.format(Date(epochSeconds * 1000))
+}
+
+private fun formatShortDate(epochSeconds: Long): String {
+    if (epochSeconds <= 0) return "-"
+    val sdf = SimpleDateFormat("dd MMM", Locale.getDefault())
     return sdf.format(Date(epochSeconds * 1000))
 }

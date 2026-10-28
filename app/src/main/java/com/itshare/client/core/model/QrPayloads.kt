@@ -12,14 +12,12 @@ data class SmbPayload(
     @SerialName("user") val user: String,
     @SerialName("pass") val pass: String,
     @SerialName("ro") val readOnly: Boolean = false,
-    @SerialName("exp") val expEpoch: Long? = null
+    @SerialName("exp") val expEpoch: Long? = null,
+    @kotlinx.serialization.Transient val lastConnectedEpoch: Long = 0L
 ) {
 
-    fun isExpired(currentTimeEpoch: Long = System.currentTimeMillis() / 1000): Boolean {
-        if (expEpoch == null || expEpoch == 0L) return false
-
-        return currentTimeEpoch > (expEpoch + 180)
-    }
+    fun isExpired(currentTimeEpoch: Long = System.currentTimeMillis() / 1000): Boolean =
+        expEpoch?.takeIf { it != 0L }?.let { currentTimeEpoch > it + 180 } ?: false
 
     fun validate(): Result<Unit> {
         if (version != 1) {

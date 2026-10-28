@@ -1,8 +1,7 @@
-﻿package com.itshare.client.ui.onboarding
+package com.itshare.client.ui.onboarding
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -12,9 +11,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.activity.compose.BackHandler
@@ -35,12 +32,16 @@ import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import com.itshare.client.core.model.SmbPayload
 import com.itshare.client.core.transfer.TransferProgress
-import com.itshare.client.ui.theme.ItShareGreen
-import com.itshare.client.ui.theme.ItShareAccent
+import com.itshare.client.ui.theme.itShareScreenGutter
 import com.itshare.client.ui.uiText
 import java.util.Locale
+import java.util.Date
+import java.util.Calendar
+import java.text.SimpleDateFormat
 
 enum class DashboardTab {
     FOLDERS,
@@ -48,7 +49,6 @@ enum class DashboardTab {
     SETTINGS
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OnboardingScreen(
     savedSessions: List<SmbPayload>,
@@ -56,33 +56,32 @@ fun OnboardingScreen(
     onSelectedTabChange: (DashboardTab) -> Unit,
     themeMode: String,
     onThemeModeChange: (String) -> Unit,
-    exploreViewMode: String = "list",
-    onExploreViewModeChange: (String) -> Unit = {},
     language: String,
     onLanguageChange: (String) -> Unit,
     downloadFolderLabel: String,
     onSelectDownloadFolder: () -> Unit,
-    transferProgress: TransferProgress = TransferProgress(),
     onScanShareClicked: () -> Unit,
-    onManualInputClicked: () -> Unit,
     onReconnectSession: (SmbPayload) -> Unit,
     onDeleteSession: (SmbPayload) -> Unit,
     onExportBackupClicked: () -> Unit,
     onImportBackupClicked: () -> Unit,
-    onCancelTransfer: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    exploreViewMode: String = "list",
+    onExploreViewModeChange: (String) -> Unit = {},
+    folderSortMode: String = "recent",
+    onFolderSortModeChange: (String) -> Unit = {},
+    transferProgress: TransferProgress = TransferProgress(),
+    onCancelTransfer: () -> Unit = {}
 ) {
     val tabHistory = remember { mutableStateListOf<DashboardTab>() }
-    var showAddShareSheet by remember { mutableStateOf(false) }
     fun selectTab(tab: DashboardTab) {
         if (tab != selectedTab) {
             tabHistory.add(selectedTab)
             onSelectedTabChange(tab)
         }
     }
-    BackHandler(enabled = showAddShareSheet || selectedTab != DashboardTab.FOLDERS || tabHistory.isNotEmpty()) {
+    BackHandler(enabled = selectedTab != DashboardTab.FOLDERS || tabHistory.isNotEmpty()) {
         when {
-            showAddShareSheet -> showAddShareSheet = false
             tabHistory.isNotEmpty() -> onSelectedTabChange(tabHistory.removeAt(tabHistory.lastIndex))
             else -> onSelectedTabChange(DashboardTab.FOLDERS)
         }
@@ -91,16 +90,19 @@ fun OnboardingScreen(
     Scaffold(
         bottomBar = {
             Column {
-                if (selectedTab == DashboardTab.FOLDERS && savedSessions.isNotEmpty()) {
+                if (selectedTab == DashboardTab.FOLDERS) {
                     Button(
-                        onClick = { showAddShareSheet = true },
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                        onClick = onScanShareClicked,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = itShareScreenGutter(), vertical = 12.dp)
+                            .heightIn(min = 48.dp),
                         shape = RoundedCornerShape(14.dp),
-                        contentPadding = PaddingValues(vertical = 13.dp)
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp)
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text(uiText(language, "Add folder", "Tambah folder"), fontWeight = FontWeight.SemiBold)
+                        Text(uiText(language, "Add Folder", "Tambah Folder"), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                     }
                 }
                 Surface(
@@ -109,69 +111,58 @@ fun OnboardingScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column {
-                        HorizontalDivider(thickness = 0.5.dp, color = Color(0xFFE6EDE8))
+                        HorizontalDivider(thickness = 0.7.dp, color = MaterialTheme.colorScheme.outlineVariant)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .navigationBarsPadding()
-                                .height(68.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .height(64.dp),
+                            verticalAlignment = Alignment.Top
                         ) {
                             val tabs = listOf(
-                                Triple(DashboardTab.FOLDERS, Icons.Default.Folder, uiText(language, "My Folders", "Folder Saya")),
-                                Triple(DashboardTab.TRANSFERS, Icons.Default.History, uiText(language, "History", "Riwayat")),
-                                Triple(DashboardTab.SETTINGS, Icons.Default.Settings, uiText(language, "Settings", "Pengaturan"))
+                                DashboardTab.FOLDERS to uiText(language, "My Folders", "Folder Saya"),
+                                DashboardTab.TRANSFERS to uiText(language, "History", "Riwayat"),
+                                DashboardTab.SETTINGS to uiText(language, "Settings", "Pengaturan")
                             )
-                            tabs.forEach { (tab, icon, label) ->
+                            tabs.forEach { (tab, label) ->
                                 val isSelected = selectedTab == tab
+                                val icon = when (tab) {
+                                    DashboardTab.FOLDERS -> Icons.Default.Folder
+                                    DashboardTab.TRANSFERS -> Icons.Default.History
+                                    DashboardTab.SETTINGS -> Icons.Default.Settings
+                                }
+                                val itemColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                 Column(
                                     modifier = Modifier
                                         .weight(1f)
                                         .fillMaxHeight()
-                                        .clickable { selectTab(tab) }
-                                        .padding(vertical = 4.dp),
+                                        .clickable { selectTab(tab) },
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center
+                                    verticalArrangement = Arrangement.Top
                                 ) {
-                                    Box(
+                                    Spacer(
                                         modifier = Modifier
-                                            .clip(RoundedCornerShape(16.dp))
-                                            .background(if (isSelected) Color(0xFFDCEDE6) else Color.Transparent)
-                                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (tab == DashboardTab.TRANSFERS && transferProgress.isTransferring) {
-                                            BadgedBox(
-                                                badge = {
-                                                    Badge(
-                                                        containerColor = Color(0xFF0F684B),
-                                                        contentColor = Color.White
-                                                    ) { Text("1") }
-                                                }
-                                            ) {
-                                                Icon(
-                                                    imageVector = icon,
-                                                    contentDescription = label,
-                                                    tint = if (isSelected) Color(0xFF0F5136) else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.size(22.dp)
-                                                )
-                                            }
-                                        } else {
-                                            Icon(
-                                                imageVector = icon,
-                                                contentDescription = label,
-                                                tint = if (isSelected) Color(0xFF0F5136) else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(22.dp)
-                                            )
-                                        }
-                                    }
-                                    Spacer(Modifier.height(3.dp))
+                                            .fillMaxWidth()
+                                            .height(2.dp)
+                                            .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                                    )
+                                    Spacer(Modifier.weight(0.45f))
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = null,
+                                        tint = itemColor,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    Spacer(Modifier.height(2.dp))
                                     Text(
                                         text = label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSelected) Color(0xFF0F684B) else MaterialTheme.colorScheme.onSurfaceVariant
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                        color = itemColor,
+                                        maxLines = 1,
+                                        softWrap = false
                                     )
+                                    Spacer(Modifier.weight(0.45f))
                                 }
                             }
                         }
@@ -181,13 +172,20 @@ fun OnboardingScreen(
         },
         modifier = modifier
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 760.dp)
+                    .fillMaxWidth()
+                    .fillMaxHeight()
+                    .align(Alignment.TopCenter)
+            ) {
 
-            if (transferProgress.isTransferring) {
+            if (transferProgress.isTransferring && selectedTab != DashboardTab.TRANSFERS) {
                 ItShareThroughputBanner(transferProgress = transferProgress)
             }
 
@@ -196,9 +194,10 @@ fun OnboardingScreen(
                     FoldersTabContent(
                         savedSessions = savedSessions,
                         language = language,
+                        folderSortMode = folderSortMode,
+                        onFolderSortModeChange = onFolderSortModeChange,
                         onReconnectSession = onReconnectSession,
-                        onDeleteSession = onDeleteSession,
-                        onAddFolderClicked = { showAddShareSheet = true }
+                        onDeleteSession = onDeleteSession
                     )
                 }
 
@@ -225,28 +224,10 @@ fun OnboardingScreen(
                     )
                 }
             }
-        }
-
-        if (showAddShareSheet) {
-            ModalBottomSheet(
-                onDismissRequest = { showAddShareSheet = false },
-                containerColor = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
-            ) {
-                AddShareBottomSheetContent(
-                    language = language,
-                    onScanShare = {
-                        showAddShareSheet = false
-                        onScanShareClicked()
-                    },
-                    onManualInput = {
-                        showAddShareSheet = false
-                        onManualInputClicked()
-                    }
-                )
             }
-        }
+
     }
+}
 }
 
 @Composable
@@ -270,7 +251,7 @@ fun ItShareThroughputBanner(
                     modifier = Modifier
                         .size(10.dp)
                         .clip(CircleShape)
-                        .background(if (transferProgress.isTransferring) ItShareGreen else ItShareAccent)
+                        .background(if (transferProgress.isTransferring) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
@@ -305,7 +286,7 @@ fun ItShareThroughputBanner(
                         Icons.Default.ArrowUpward,
                         contentDescription = null,
                         modifier = Modifier.size(14.dp),
-                        tint = ItShareAccent
+                        tint = MaterialTheme.colorScheme.tertiary
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
@@ -324,54 +305,79 @@ fun ItShareThroughputBanner(
 @Composable
 fun FoldersTabContent(
     savedSessions: List<SmbPayload>,
-    language: String = "en",
     onReconnectSession: (SmbPayload) -> Unit,
     onDeleteSession: (SmbPayload) -> Unit,
-    onAddFolderClicked: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    language: String = "en",
+    folderSortMode: String = "recent",
+    onFolderSortModeChange: (String) -> Unit = {}
 ) {
-    val context = LocalContext.current
-    val networkLabel = remember(context, language) {
-        val manager = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val capabilities = manager?.getNetworkCapabilities(manager.activeNetwork)
-        when {
-            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> uiText(language, "Wi-Fi connected", "Wi-Fi tersambung")
-            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> "Ethernet"
-            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> uiText(language, "Mobile data", "Data seluler")
-            else -> uiText(language, "Offline", "Luring")
+    var showFolderSortMenu by remember { mutableStateOf(false) }
+    val sortedSessions = remember(savedSessions, folderSortMode) {
+        when (folderSortMode) {
+            "name_asc" -> savedSessions.sortedWith(
+                compareBy<SmbPayload> { it.share.lowercase(Locale.ROOT) }
+                    .thenBy { it.host.lowercase(Locale.ROOT) }
+            )
+            "name_desc" -> savedSessions.sortedWith(
+                compareByDescending<SmbPayload> { it.share.lowercase(Locale.ROOT) }
+                    .thenBy { it.host.lowercase(Locale.ROOT) }
+            )
+            else -> savedSessions.sortedWith(
+                compareByDescending<SmbPayload> { it.lastConnectedEpoch }
+                    .thenBy { it.share.lowercase(Locale.ROOT) }
+            )
         }
     }
-
+    val folderSortLabel = when (folderSortMode) {
+        "name_asc" -> uiText(language, "Name A–Z", "Nama A–Z")
+        "name_desc" -> uiText(language, "Name Z–A", "Nama Z–A")
+        else -> uiText(language, "Last opened", "Terakhir dibuka")
+    }
     LazyColumn(
-        modifier = modifier.fillMaxSize().padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        contentPadding = PaddingValues(top = 18.dp, bottom = 96.dp)
+        modifier = modifier.fillMaxSize().padding(horizontal = itShareScreenGutter()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(top = 16.dp, bottom = 12.dp)
     ) {
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Bottom
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(uiText(language, "LOCAL NETWORK", "JARINGAN LOKAL"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(5.dp))
-                    Text(uiText(language, "Shared folders", "Folder bersama"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                }
-                Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-                    Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(7.dp).clip(CircleShape).background(if (networkLabel == uiText(language, "Offline", "Luring")) MaterialTheme.colorScheme.error else ItShareAccent))
-                        Spacer(Modifier.width(6.dp))
-                        Text(networkLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, maxLines = 1)
-                    }
-                }
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text("ItShare", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             }
         }
 
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(uiText(language, "Saved connections", "Koneksi tersimpan"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("${savedSessions.size}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(uiText(language, "Saved sessions", "Sesi tersimpan"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Box {
+                    IconButton(onClick = { showFolderSortMenu = true }) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Sort,
+                            contentDescription = "${uiText(language, "Sort folders", "Urutkan folder")}: $folderSortLabel",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showFolderSortMenu,
+                        onDismissRequest = { showFolderSortMenu = false }
+                    ) {
+                        listOf(
+                            "name_asc" to uiText(language, "Name A–Z", "Nama A–Z"),
+                            "name_desc" to uiText(language, "Name Z–A", "Nama Z–A"),
+                            "recent" to uiText(language, "Last opened", "Terakhir dibuka")
+                        ).forEach { (mode, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                leadingIcon = {
+                                    if (folderSortMode == mode) Icon(Icons.Default.Check, contentDescription = null)
+                                },
+                                onClick = {
+                                    onFolderSortModeChange(mode)
+                                    showFolderSortMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -386,17 +392,11 @@ fun FoldersTabContent(
                         Text(uiText(language, "No saved connections", "Belum ada koneksi"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Text(uiText(language, "Scan a QR code to connect.", "Pindai QR untuk terhubung."), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(20.dp))
-                        Button(onClick = onAddFolderClicked, shape = RoundedCornerShape(14.dp)) {
-                            Icon(Icons.Default.Add, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(uiText(language, "Add connection", "Tambah koneksi"))
-                        }
                     }
                 }
             }
         } else {
-            items(savedSessions, key = { "${it.host}:${it.port}:${it.share}" }) { session ->
+            items(sortedSessions, key = { "${it.host}:${it.port}:${it.share}" }) { session ->
                 ItShareFolderCard(session = session, onOpen = { onReconnectSession(session) }, onDelete = { onDeleteSession(session) }, language = language)
             }
         }
@@ -408,17 +408,18 @@ fun ItShareFolderCard(
     session: SmbPayload,
     onOpen: () -> Unit,
     onDelete: () -> Unit,
-    language: String = "en",
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    language: String = "en"
 ) {
     var showOptions by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     Card(
         shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onOpen)
@@ -426,7 +427,7 @@ fun ItShareFolderCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -436,53 +437,65 @@ fun ItShareFolderCard(
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(50.dp)
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Default.Folder,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(14.dp))
+                Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                         Text(
                             text = session.share,
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                         )
-                        Surface(
-                            shape = RoundedCornerShape(5.dp),
-                            color = MaterialTheme.colorScheme.secondaryContainer
-                        ) {
-                            Text(
-                                text = if (session.readOnly) uiText(language, "READ ONLY", "HANYA BACA") else uiText(language, "READ / WRITE", "BACA / TULIS"),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontSize = 8.sp,
-                                letterSpacing = 0.5.sp,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 3.dp)
-                            )
+                        if (session.readOnly) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.tertiaryContainer
+                            ) {
+                                Text(
+                                    text = uiText(language, "Read only", "Baca saja"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                        if (session.user.isBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer
+                            ) {
+                                Text(
+                                    text = uiText(language, "Login needed", "Perlu login"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                )
+                            }
                         }
                     }
                     Text(
-                        text = "${session.host}:${session.port}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = session.user,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "${session.host}:${session.port} · ${session.user.ifBlank { uiText(language, "Credentials required", "Kredensial diperlukan") }}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
@@ -524,260 +537,254 @@ fun ItShareFolderCard(
 @Composable
 fun TransfersTabContent(
     transferProgress: TransferProgress,
-    language: String = "en",
     onCancelTransfer: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    language: String = "en"
 ) {
-    var transferHistoryPage by remember { mutableStateOf(0) }
+    var transferHistoryPage by remember { mutableIntStateOf(0) }
     val historyPageSize = 5
     val historyPageCount = (transferProgress.recentTransfers.size + historyPageSize - 1) / historyPageSize
     LaunchedEffect(historyPageCount) {
-        if (historyPageCount == 0) transferHistoryPage = 0
-        else transferHistoryPage = transferHistoryPage.coerceIn(0, historyPageCount - 1)
+        transferHistoryPage = if (historyPageCount == 0) 0
+        else transferHistoryPage.coerceIn(0, historyPageCount - 1)
     }
-
-    val scrollState = rememberScrollState()
+    val speedLabel = formatSpeed(transferProgress.speedBytesPerSec).removeSuffix("/s") + uiText(language, "/s", "/dtk")
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 96.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(start = itShareScreenGutter(), end = itShareScreenGutter(), top = 24.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            text = uiText(language, "TRANSFERS", "TRANSFER"),
-            style = MaterialTheme.typography.labelSmall,
+            text = uiText(language, "History", "Riwayat"),
+            style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary,
-            letterSpacing = 1.sp
+            color = MaterialTheme.colorScheme.onSurface
         )
-
-        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = uiText(language, "One card for each transfer", "Satu kartu untuk setiap proses transfer"),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         if (transferProgress.isTransferring) {
             Card(
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(18.dp)
+                    modifier = Modifier.fillMaxWidth().padding(14.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = if (transferProgress.isDownload) Icons.Default.Download else Icons.Default.Upload,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = if (transferProgress.isDownload) "Mengunduh" else "Mengunggah",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        TextButton(onClick = onCancelTransfer) {
-                            Text(uiText(language, "Cancel", "Batal"), color = MaterialTheme.colorScheme.error)
-                        }
+                        Text(
+                            text = if (transferProgress.fileIndex == 0) {
+                                if (transferProgress.isDownload) uiText(language, "Preparing download", "Menyiapkan unduhan")
+                                else uiText(language, "Preparing upload", "Menyiapkan unggahan")
+                            } else {
+                                "${if (transferProgress.isDownload) uiText(language, "Downloading", "Mengunduh") else uiText(language, "Uploading", "Mengunggah")} ${transferProgress.fileIndex} ${uiText(language, "of", "dari")} ${transferProgress.totalFiles}"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
+                        )
                     }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
                     Text(
-                        text = transferProgress.currentFileName,
+                        text = if (transferProgress.totalBytes > 0L) {
+                            "${transferProgress.currentFileName} · ${formatFileSize(transferProgress.bytesTransferred)} ${uiText(language, "of", "dari")} ${formatFileSize(transferProgress.totalBytes)} · $speedLabel"
+                        } else {
+                            "${transferProgress.currentFileName} · ${formatFileSize(transferProgress.bytesTransferred)} · $speedLabel"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    LinearProgressIndicator(
-                        progress = { transferProgress.progressPercent / 100f },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(8.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                    )
-
                     Spacer(modifier = Modifier.height(10.dp))
-
+                    if (transferProgress.totalBytes > 0L) {
+                        LinearProgressIndicator(
+                            progress = { transferProgress.progressPercent / 100f },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            trackColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    } else {
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            trackColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "${transferProgress.progressPercent}% • ${formatFileSize(transferProgress.bytesTransferred)} of ${formatFileSize(transferProgress.totalBytes)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = formatSpeed(transferProgress.speedBytesPerSec),
-                            style = MaterialTheme.typography.bodySmall,
+                            text = if (transferProgress.totalBytes > 0L) {
+                                "${transferProgress.progressPercent}%"
+                            } else {
+                                formatFileSize(transferProgress.bytesTransferred)
+                            },
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                            modifier = Modifier.align(Alignment.CenterVertically)
                         )
+                        OutlinedButton(
+                            onClick = onCancelTransfer,
+                            modifier = Modifier.heightIn(min = 48.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f))
+                        ) {
+                            Text(uiText(language, "Cancel", "Batal"), color = MaterialTheme.colorScheme.error)
+                        }
                     }
-                }
-            }
-        } else {
-            Card(
-                shape = RoundedCornerShape(8.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = ItShareAccent,
-                        modifier = Modifier.size(40.dp)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = uiText(language, "No active transfers", "Tidak ada transfer aktif"),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = uiText(language, "Your transfers will appear here.", "Transfer akan tampil di sini."),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
         }
 
         if (transferProgress.recentTransfers.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(20.dp))
-
-            Text(
-                text = uiText(language, "RECENT TRANSFERS", "TRANSFER TERBARU"),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-                letterSpacing = 1.sp
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Card(
-                shape = RoundedCornerShape(8.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 340.dp)
+            val visibleGroups = transferProgress.recentTransfers
+                .drop(transferHistoryPage * historyPageSize)
+                .take(historyPageSize)
+            visibleGroups.forEachIndexed { index, group ->
+                var expanded by remember(group.id) { mutableStateOf(index == 0 && transferHistoryPage == 0) }
+                var filePage by remember(group.id) { mutableIntStateOf(0) }
+                val filesPerGroupPage = 30
+                val filePageCount = (group.items.size + filesPerGroupPage - 1) / filesPerGroupPage
+                LaunchedEffect(filePageCount) {
+                    filePage = if (filePageCount == 0) 0
+                    else filePage.coerceIn(0, filePageCount - 1)
+                }
+                val succeeded = group.items.all { it.isSuccess }
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    items(
-                        transferProgress.recentTransfers.drop(transferHistoryPage * historyPageSize).take(historyPageSize),
-                        key = { it.id }
-                    ) { group ->
-                        var expanded by remember(group.id) { mutableStateOf(false) }
-                        var filePage by remember(group.id) { mutableStateOf(0) }
-                        val filesPerGroupPage = 30
-                        val filePageCount = (group.items.size + filesPerGroupPage - 1) / filesPerGroupPage
-                        LaunchedEffect(filePageCount) {
-                            if (filePageCount == 0) filePage = 0
-                            else filePage = filePage.coerceIn(0, filePageCount - 1)
-                        }
-                        Column {
-                            Surface(
-                                onClick = { expanded = !expanded },
-                                color = MaterialTheme.colorScheme.surface,
-                                modifier = Modifier.fillMaxWidth()
+                    Column {
+                        Surface(onClick = { expanded = !expanded }, color = MaterialTheme.colorScheme.surface) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    modifier = Modifier.size(40.dp)
                                 ) {
-                                    Surface(
-                                        shape = CircleShape,
-                                        color = if (group.isDownload) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
-                                        modifier = Modifier.size(36.dp)
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Icon(
-                                                imageVector = if (group.isDownload) Icons.Default.Download else Icons.Default.Upload,
-                                                contentDescription = null,
-                                                tint = if (group.isDownload) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = if (group.isDownload) Icons.Default.ArrowDownward else Icons.Default.ArrowUpward,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "${if (group.isDownload) uiText(language, "Download", "Unduh") else uiText(language, "Upload", "Unggah")} • ${group.items.size} ${uiText(language, "files", "berkas")}",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${formatFileSize(group.items.sumOf { it.sizeBytes })} · ${formatTransferDate(group.timestampEpoch, language)}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    val sessionLabel = listOf(group.serverAddress, group.shareName)
+                                        .filter { it.isNotBlank() }
+                                        .joinToString(" · ")
+                                    val folderLabel = if (group.isDownload) {
+                                        group.localFolderName.takeIf { it.isNotBlank() }
+                                    } else {
+                                        group.remoteFolderPath.ifBlank { "/" }
+                                    }
+                                    val contextLabel = listOfNotNull(
+                                        sessionLabel.takeIf { it.isNotBlank() },
+                                        folderLabel?.let { folder ->
+                                            "→ $folder"
                                         }
-                                    }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
+                                    ).joinToString("  ·  ")
+                                    if (contextLabel.isNotBlank()) {
                                         Text(
-                                            text = "${if (group.isDownload) uiText(language, "Download", "Unduh") else uiText(language, "Upload", "Unggah")} • ${group.items.size} ${uiText(language, "files", "berkas")}",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        Text(
-                                            text = "${group.items.sumOf { it.sizeBytes }.let(::formatFileSize)} • ${java.text.SimpleDateFormat("dd MMM, HH:mm", java.util.Locale.getDefault()).format(java.util.Date(group.timestampEpoch * 1000))}",
+                                            text = contextLabel,
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
-                                    Icon(
-                                        imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                        contentDescription = if (expanded) "Tutup daftar berkas" else "Lihat berkas",
-                                        tint = MaterialTheme.colorScheme.primary
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (succeeded) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.errorContainer
+                                ) {
+                                    Text(
+                                        text = if (succeeded) uiText(language, "Complete", "Selesai") else uiText(language, "Failed", "Gagal"),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (succeeded) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                     )
                                 }
                             }
-                            if (expanded) {
-                                group.items.drop(filePage * filesPerGroupPage).take(filesPerGroupPage).forEach { file ->
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(start = 64.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(file.fileName, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-                                        Text(formatFileSize(file.sizeBytes), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (expanded) {
+                            group.items.drop(filePage * filesPerGroupPage).take(filesPerGroupPage).forEach { file ->
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(start = 66.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(file.fileName, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
+                                        if (file.locationPath.isNotBlank()) {
+                                            Text(
+                                                text = file.locationPath,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
+                                    Text(formatFileSize(file.sizeBytes), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                if (filePageCount > 1) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(start = 64.dp, end = 16.dp, bottom = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.End
-                                    ) {
-                                        TextButton(onClick = { filePage-- }, enabled = filePage > 0) {
-                                            Text(uiText(language, "Previous", "Sebelumnya"))
-                                        }
-                                        Text("${filePage + 1} / $filePageCount", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        TextButton(onClick = { filePage++ }, enabled = filePage < filePageCount - 1) {
-                                            Text(uiText(language, "Next", "Berikutnya"))
-                                        }
-                                    }
+                            }
+                            if (filePageCount > 1) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(start = 66.dp, end = 12.dp, bottom = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    TextButton(onClick = { filePage-- }, enabled = filePage > 0) { Text(uiText(language, "Previous", "Sebelumnya")) }
+                                    Text("${filePage + 1} / $filePageCount", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    TextButton(onClick = { filePage++ }, enabled = filePage < filePageCount - 1) { Text(uiText(language, "Next", "Berikutnya")) }
                                 }
                             }
                         }
-                        HorizontalDivider(
-                            thickness = 0.5.dp,
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
-                            modifier = Modifier.padding(start = 56.dp)
-                        )
                     }
                 }
             }
@@ -800,7 +807,38 @@ fun TransfersTabContent(
                     }
                 }
             }
+        } else if (!transferProgress.isTransferring) {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    uiText(language, "No transfer history yet", "Belum ada riwayat transfer"),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(20.dp)
+                )
+            }
         }
+    }
+}
+
+private fun formatTransferDate(timestampEpoch: Long, language: String): String {
+    val transferDate = Date(timestampEpoch * 1000)
+    val now = Calendar.getInstance()
+    val transferCalendar = Calendar.getInstance().apply { time = transferDate }
+    val time = SimpleDateFormat("HH.mm", Locale.getDefault()).format(transferDate)
+    val isSameDay = now.get(Calendar.YEAR) == transferCalendar.get(Calendar.YEAR) &&
+        now.get(Calendar.DAY_OF_YEAR) == transferCalendar.get(Calendar.DAY_OF_YEAR)
+    val yesterday = (now.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -1) }
+    val isYesterday = yesterday.get(Calendar.YEAR) == transferCalendar.get(Calendar.YEAR) &&
+        yesterday.get(Calendar.DAY_OF_YEAR) == transferCalendar.get(Calendar.DAY_OF_YEAR)
+    return when {
+        isSameDay -> "${uiText(language, "Today", "Hari ini")} $time"
+        isYesterday -> "${uiText(language, "Yesterday", "Kemarin")} $time"
+        else -> "${SimpleDateFormat("dd MMM", Locale.getDefault()).format(transferDate)} $time"
     }
 }
 
@@ -810,13 +848,13 @@ fun SettingsTabContent(
     onImportBackupClicked: () -> Unit,
     themeMode: String,
     onThemeModeChange: (String) -> Unit,
-    exploreViewMode: String = "list",
-    onExploreViewModeChange: (String) -> Unit = {},
     language: String,
     onLanguageChange: (String) -> Unit,
     downloadFolderLabel: String,
     onSelectDownloadFolder: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    exploreViewMode: String = "list",
+    onExploreViewModeChange: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -857,14 +895,17 @@ fun SettingsTabContent(
             (used.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
         } else 0f
     }
+    val containerWidth = LocalWindowInfo.current.containerSize.width
+    val screenWidthDp = with(LocalDensity.current) { containerWidth.toDp().value }
+    val compactWidth = screenWidthDp < 380
 
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 20.dp),
-        contentPadding = PaddingValues(bottom = 96.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .padding(horizontal = itShareScreenGutter()),
+        contentPadding = PaddingValues(bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
 
         item {
@@ -873,7 +914,7 @@ fun SettingsTabContent(
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.padding(top = 20.dp, bottom = 4.dp)
+                modifier = Modifier.padding(top = 24.dp, bottom = 4.dp)
             )
         }
 
@@ -881,30 +922,30 @@ fun SettingsTabContent(
             Card(
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, Color(0xFFE6EDE8)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(18.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Surface(
                             shape = CircleShape,
-                            color = Color(0xFFDCEDE6),
+                            color = MaterialTheme.colorScheme.primaryContainer,
                             modifier = Modifier.size(48.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     Icons.Default.Smartphone,
                                     contentDescription = null,
-                                    tint = Color(0xFF14563A),
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                     modifier = Modifier.size(24.dp)
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.width(14.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
                             val deviceName = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"
@@ -912,7 +953,9 @@ fun SettingsTabContent(
                                 text = deviceName,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -920,21 +963,38 @@ fun SettingsTabContent(
                                     modifier = Modifier
                                         .size(7.dp)
                                         .clip(CircleShape)
-                                        .background(Color(0xFF0F8A6B))
+                                        .background(MaterialTheme.colorScheme.primary)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = networkStatusLabel,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
                     }
 
                     if (totalBytes > 0) {
-                        Spacer(modifier = Modifier.height(18.dp))
-                        Row(
+                        Spacer(modifier = Modifier.height(12.dp))
+                        val storageSummary = if (language == "id") {
+                            "Sisa ${formatStorageDisplay(freeBytes)} dari ${formatStorageDisplay(totalBytes)}"
+                        } else {
+                            "${formatStorageDisplay(freeBytes)} free of ${formatStorageDisplay(totalBytes)}"
+                        }
+                        if (compactWidth) {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = uiText(language, "Phone storage", "Penyimpanan HP"),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(storageSummary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        } else Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
@@ -946,12 +1006,8 @@ fun SettingsTabContent(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = if (language == "id") {
-                                    "Sisa ${formatStorageDisplay(freeBytes)} dari ${formatStorageDisplay(totalBytes)}"
-                                } else {
-                                    "${formatStorageDisplay(freeBytes)} free of ${formatStorageDisplay(totalBytes)}"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
+                                text = storageSummary,
+                                style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -964,8 +1020,8 @@ fun SettingsTabContent(
                                 .fillMaxWidth()
                                 .height(8.dp)
                                 .clip(RoundedCornerShape(4.dp)),
-                            color = Color(0xFF0F684B),
-                            trackColor = Color(0xFFE2EBE5)
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant
                         )
                     }
                 }
@@ -978,36 +1034,16 @@ fun SettingsTabContent(
                     text = uiText(language, "DISPLAY", "TAMPILAN"),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF176B49),
+                    color = MaterialTheme.colorScheme.primary,
                     letterSpacing = 1.sp,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
                 )
 
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, Color(0xFFE6EDE8)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                SettingsSectionCard {
                     Column {
 
-                        SettingsOptionRow(
-                            icon = {
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = Color(0xFFDCEDE6),
-                                    modifier = Modifier.size(42.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            Icons.Default.Contrast,
-                                            contentDescription = null,
-                                            tint = Color(0xFF14563A),
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-                            },
+                        SettingsRow(
+                            icon = Icons.Default.Contrast,
                             title = uiText(language, "Theme", "Tema"),
                             value = when (themeMode) {
                                 "light" -> uiText(language, "Light", "Terang")
@@ -1019,27 +1055,12 @@ fun SettingsTabContent(
 
                         HorizontalDivider(
                             thickness = 0.8.dp,
-                            color = Color(0xFFF0F4F1),
-                            modifier = Modifier.padding(start = 72.dp)
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(start = 68.dp)
                         )
 
-                        SettingsOptionRow(
-                            icon = {
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = Color(0xFFDCEDE6),
-                                    modifier = Modifier.size(42.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            Icons.Default.GridView,
-                                            contentDescription = null,
-                                            tint = Color(0xFF14563A),
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-                            },
+                        SettingsRow(
+                            icon = Icons.Default.GridView,
                             title = uiText(language, "File view", "Tampilan berkas"),
                             value = if (exploreViewMode == "grid") uiText(language, "Grid", "Kisi") else uiText(language, "List", "Daftar"),
                             onClick = { showExploreViewSheet = true }
@@ -1047,27 +1068,12 @@ fun SettingsTabContent(
 
                         HorizontalDivider(
                             thickness = 0.8.dp,
-                            color = Color(0xFFF0F4F1),
-                            modifier = Modifier.padding(start = 72.dp)
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(start = 68.dp)
                         )
 
-                        SettingsOptionRow(
-                            icon = {
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = Color(0xFFDCEDE6),
-                                    modifier = Modifier.size(42.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(
-                                            text = "Aa",
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF14563A),
-                                            fontSize = 15.sp
-                                        )
-                                    }
-                                }
-                            },
+                        SettingsRow(
+                            iconLabel = "Aa",
                             title = uiText(language, "Language", "Bahasa"),
                             value = if (language == "id") "Indonesia" else "English",
                             onClick = { showLanguageSheet = true }
@@ -1083,17 +1089,12 @@ fun SettingsTabContent(
                     text = uiText(language, "DOWNLOADS", "UNDUHAN"),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF176B49),
+                    color = MaterialTheme.colorScheme.primary,
                     letterSpacing = 1.sp,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
                 )
 
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, Color(0xFFE6EDE8)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                SettingsSectionCard {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1103,20 +1104,20 @@ fun SettingsTabContent(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFFDCEDE6),
-                            modifier = Modifier.size(42.dp)
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.size(40.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     Icons.Default.Folder,
                                     contentDescription = null,
-                                    tint = Color(0xFF14563A),
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.width(14.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
@@ -1140,7 +1141,7 @@ fun SettingsTabContent(
                             text = uiText(language, "Change", "Ubah"),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
-                            color = Color(0xFF176B49)
+                            color = MaterialTheme.colorScheme.primary
                         )
 
                         Spacer(modifier = Modifier.width(4.dp))
@@ -1148,7 +1149,7 @@ fun SettingsTabContent(
                         Icon(
                             Icons.Default.ChevronRight,
                             contentDescription = null,
-                            tint = Color(0xFF8B9B91),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -1162,20 +1163,15 @@ fun SettingsTabContent(
                     text = uiText(language, "BACKUP", "CADANGAN"),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF176B49),
+                    color = MaterialTheme.colorScheme.primary,
                     letterSpacing = 1.sp,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
                 )
 
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, Color(0xFFE6EDE8)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                SettingsSectionCard {
                     Column {
 
-                        SettingsActionRow(
+                        SettingsRow(
                             icon = Icons.Default.ArrowUpward,
                             title = uiText(language, "Export PC list", "Ekspor daftar PC"),
                             subtitle = uiText(language, "Save saved sessions to JSON file", "Simpan sesi tersimpan ke berkas JSON"),
@@ -1184,11 +1180,11 @@ fun SettingsTabContent(
 
                         HorizontalDivider(
                             thickness = 0.8.dp,
-                            color = Color(0xFFF0F4F1),
-                            modifier = Modifier.padding(start = 72.dp)
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(start = 68.dp)
                         )
 
-                        SettingsActionRow(
+                        SettingsRow(
                             icon = Icons.Default.ArrowDownward,
                             title = uiText(language, "Import PC list", "Impor daftar PC"),
                             subtitle = uiText(language, "Restore sessions from JSON file", "Pulihkan sesi dari berkas JSON"),
@@ -1254,92 +1250,100 @@ fun SettingsTabContent(
 }
 
 @Composable
-private fun SettingsOptionRow(
-    icon: @Composable () -> Unit,
-    title: String,
-    value: String,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
+private fun SettingsSectionCard(content: @Composable () -> Unit) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        icon()
-        Spacer(modifier = Modifier.width(14.dp))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            color = Color(0xFF176B49)
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Icon(
-            Icons.Default.ChevronRight,
-            contentDescription = null,
-            tint = Color(0xFF8B9B91),
-            modifier = Modifier.size(18.dp)
-        )
+        content()
     }
 }
 
 @Composable
-private fun SettingsActionRow(
-    icon: ImageVector,
+private fun SettingsRow(
+    icon: ImageVector? = null,
+    iconLabel: String? = null,
     title: String,
-    subtitle: String,
+    subtitle: String? = null,
+    value: String? = null,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Surface(
             shape = RoundedCornerShape(12.dp),
-            color = Color(0xFFDCEDE6),
-            modifier = Modifier.size(42.dp)
+            color = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier.size(40.dp)
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    tint = Color(0xFF14563A),
-                    modifier = Modifier.size(20.dp)
-                )
+                when {
+                    icon != null -> Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    iconLabel != null -> Text(
+                        text = iconLabel,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontSize = 15.sp
+                    )
+                }
             }
         }
-        Spacer(modifier = Modifier.width(14.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        Spacer(modifier = Modifier.width(12.dp))
+        if (subtitle.isNullOrBlank()) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            if (subtitle.isNotBlank()) {
+        } else {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
+        }
+        if (!value.isNullOrBlank()) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.width(4.dp))
         }
         Icon(
             Icons.Default.ChevronRight,
             contentDescription = null,
-            tint = Color(0xFF8B9B91),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(18.dp)
         )
     }
@@ -1364,7 +1368,7 @@ private fun SettingsSelectionSheet(
                     .width(36.dp)
                     .height(4.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFFCAD5CD))
+                    .background(MaterialTheme.colorScheme.outlineVariant)
             )
         }
     ) {
@@ -1378,7 +1382,7 @@ private fun SettingsSelectionSheet(
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(bottom = 16.dp)
+                modifier = Modifier.padding(bottom = 8.dp)
             )
             options.forEach { (key, label) ->
                 val isSelected = selectedKey == key
@@ -1389,15 +1393,15 @@ private fun SettingsSelectionSheet(
                             onSelect(key)
                             onDismiss()
                         }
-                        .padding(vertical = 12.dp),
+                        .padding(vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     RadioButton(
                         selected = isSelected,
                         onClick = null,
                         colors = RadioButtonDefaults.colors(
-                            selectedColor = Color(0xFF0F8A6B),
-                            unselectedColor = Color(0xFF8B9B91)
+                            selectedColor = MaterialTheme.colorScheme.primary,
+                            unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     )
                     Spacer(Modifier.width(16.dp))
@@ -1415,91 +1419,6 @@ private fun SettingsSelectionSheet(
 
 private fun formatStorageDisplay(bytes: Long): String {
     return String.format(Locale.GERMANY, "%.2f GB", bytes / (1024.0 * 1024 * 1024))
-}
-
-@Composable
-fun AddShareBottomSheetContent(
-    language: String = "en",
-    onScanShare: () -> Unit,
-    onManualInput: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
-            .navigationBarsPadding(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text(
-            text = uiText(language, "Add connection", "Tambah koneksi"),
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = uiText(language, "Connect to a PC.", "Sambungkan ke PC."),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        AddShareOptionItem(
-            icon = Icons.Default.QrCodeScanner,
-            title = uiText(language, "Scan QR", "Pindai QR"),
-            subtitle = uiText(language, "Scan an ItShare or Wi-Fi QR code", "Pindai QR ItShare atau Wi-Fi"),
-            onClick = onScanShare
-        )
-        AddShareOptionItem(
-            icon = Icons.Default.Edit,
-            title = uiText(language, "Connect manually", "Sambungkan manual"),
-            subtitle = uiText(language, "Enter the PC address and credentials", "Masukkan alamat PC dan kredensial"),
-            onClick = onManualInput
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-    }
-}
-
-@Composable
-fun AddShareOptionItem(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.size(46.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-                }
-            }
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Text(text = subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-
-            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
 }
 
 private fun formatFileSize(bytes: Long): String {

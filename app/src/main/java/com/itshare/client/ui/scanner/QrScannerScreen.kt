@@ -45,11 +45,11 @@ import java.util.concurrent.Executors
 
 @Composable
 fun QrScannerScreen(
-    language: String = "en",
     onQrCodeDetected: (String) -> Unit,
     onManualInputClicked: () -> Unit,
     onBackClicked: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    language: String = "en"
 ) {
     BackHandler(onBack = onBackClicked)
     val context = LocalContext.current
@@ -102,7 +102,10 @@ fun QrScannerScreen(
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                 )
                 Spacer(modifier = Modifier.height(24.dp))
-                Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                Button(
+                    onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
                     Text(uiText(language, "Allow camera", "Izinkan kamera"))
                 }
             }
@@ -154,7 +157,6 @@ fun CameraPreviewWithScanner(
     onQrScanned: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var isScanned by remember { mutableStateOf(false) }
     var boundCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
@@ -180,7 +182,7 @@ fun CameraPreviewWithScanner(
                 val cameraProvider = cameraProviderFuture.get()
                 boundCameraProvider = cameraProvider
                 val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
+                    it.surfaceProvider = previewView.surfaceProvider
                 }
 
                 val barcodeOptions = BarcodeScannerOptions.Builder()
